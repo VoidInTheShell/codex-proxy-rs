@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -728,7 +728,7 @@ impl ProviderLeasePort for TestLeaseCoordinator {
 
 #[derive(Default)]
 pub(crate) struct MemorySessionAffinity {
-    bindings: Mutex<BTreeMap<(String, String), ProviderAccountId>>,
+    bindings: Mutex<BTreeMap<(String, String), (ProviderAccountId, Instant)>>,
     lookups: Mutex<Vec<String>>,
     renewal_ttls: Mutex<Vec<Duration>>,
 }
@@ -754,8 +754,25 @@ impl MemorySessionAffinity {
     ) {
         self.bindings.lock().expect("session affinity lock").insert(
             (provider_kind.as_str().to_owned(), key.to_owned()),
-            account_id,
+            (account_id, Instant::now() + Duration::from_secs(60)),
         );
+    }
+
+    /// 对齐 Redis 合同：读取时播惰性清除已过期绑定，到期后 load 返回空。
+    fn live_binding(
+        bindings: &mut BTreeMap<(String, String), (ProviderAccountId, Instant)>,
+        binding_key: &(String, String),
+    ) -> Option<ProviderAccountId> {
+        match bindings.get(binding_key) {
+            Some((account_id, expires_at)) if &Instant::now() < expires_at => {
+                Some(account_id.clone())
+            }
+            Some(_) => {
+                bindings.remove(binding_key);
+                None
+            }
+            None => None,
+        }
     }
 }
 
@@ -770,15 +787,14 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
                 .lock()
                 .expect("session affinity lookup lock")
                 .push(key.expose_to_store().to_owned());
-            Ok(self
-                .bindings
-                .lock()
-                .expect("session affinity lock")
-                .get(&(
+            let mut bindings = self.bindings.lock().expect("session affinity lock");
+            Ok(Self::live_binding(
+                &mut bindings,
+                &(
                     provider_kind.as_str().to_owned(),
                     key.expose_to_store().to_owned(),
-                ))
-                .cloned())
+                ),
+            ))
         })
     }
 
@@ -787,7 +803,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         provider_kind: &'a ProviderKind,
         key: &'a ProviderSessionAffinityKey,
         account_id: &'a ProviderAccountId,
-        _ttl: Duration,
+        ttl: Duration,
     ) -> BoxFuture<'a, Result<(), ProviderStoreError>> {
         Box::pin(async move {
             self.bindings.lock().expect("session affinity lock").insert(
@@ -795,7 +811,7 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
                     provider_kind.as_str().to_owned(),
                     key.expose_to_store().to_owned(),
                 ),
-                account_id.clone(),
+                (account_id.clone(), Instant::now() + ttl),
             );
             Ok(())
         })
@@ -806,16 +822,24 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
         provider_kind: &'a ProviderKind,
         key: &'a ProviderSessionAffinityKey,
         candidate_account_id: &'a ProviderAccountId,
-        _ttl: Duration,
+        ttl: Duration,
     ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
         Box::pin(async move {
             let mut bindings = self.bindings.lock().expect("session affinity lock");
+            let binding_key = (
+                provider_kind.as_str().to_owned(),
+                key.expose_to_store().to_owned(),
+            );
+            // 先清除已过期的绑定，保证 TTL 到期后 claim 重新首绑，而不是沿用死条目。
+            if let Some((_, expires_at)) = bindings.get(&binding_key)
+                && Instant::now() >= *expires_at
+            {
+                bindings.remove(&binding_key);
+            }
             Ok(bindings
-                .entry((
-                    provider_kind.as_str().to_owned(),
-                    key.expose_to_store().to_owned(),
-                ))
-                .or_insert_with(|| candidate_account_id.clone())
+                .entry(binding_key)
+                .or_insert_with(|| (candidate_account_id.clone(), Instant::now() + ttl))
+                .0
                 .clone())
         })
     }
@@ -834,23 +858,29 @@ impl ProviderSessionAffinityPort for MemorySessionAffinity {
                 key.expose_to_store().to_owned(),
             );
             let mut bindings = self.bindings.lock().expect("session affinity lock");
-            if bindings
-                .get(&binding_key)
-                .is_none_or(|current| current == expected_account_id)
+            if Self::live_binding(&mut bindings, &binding_key)
+                .is_none_or(|current| current == *expected_account_id)
             {
-                bindings.insert(binding_key, replacement_account_id.clone());
+                bindings.insert(
+                    binding_key,
+                    (replacement_account_id.clone(), Instant::now() + ttl),
+                );
                 self.renewal_ttls
                     .lock()
                     .expect("affinity TTL lock")
                     .push(ttl);
                 return Ok(replacement_account_id.clone());
             }
-            bindings.get(&binding_key).cloned().ok_or_else(|| {
-                ProviderStoreError::new(
-                    gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
-                    "resolve in-memory provider session affinity",
-                )
-            })
+            bindings
+                .get(&binding_key)
+                .cloned()
+                .map(|(account, _)| account)
+                .ok_or_else(|| {
+                    ProviderStoreError::new(
+                        gateway_core::provider_ports::ProviderStoreErrorKind::Unavailable,
+                        "resolve in-memory provider session affinity",
+                    )
+                })
         })
     }
 
