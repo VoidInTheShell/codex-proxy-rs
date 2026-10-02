@@ -291,3 +291,178 @@ async fn egress_grouped_derivation_reuses_default_proxy_group() {
         "same egress via default proxy and document URL must share installation_id"
     );
 }
+
+// —— 单元级行为（从 src/credential/installation.rs 内联模块迁出，仓库规则：生产源码不承载测试）——
+use gateway_core::account::OutboundProxy;
+
+mod unit {
+    use super::*;
+    use uuid::Uuid;
+
+
+    
+        
+    
+    fn deriver() -> CodexInstallationIdDeriver {
+        CodexInstallationIdDeriver::load_or_create(std::path::Path::new(
+            "/tmp/codex-installation-id-deriver-test-secret",
+        ))
+        .expect("identity")
+    }
+
+    fn proxy(url: &str) -> OutboundProxy {
+        OutboundProxy::parse(url).expect("proxy url")
+    }
+
+    #[test]
+    fn group_key_distinguishes_direct_and_proxy_exits() {
+        assert_eq!(CodexInstallationIdDeriver::group_key(None), "direct");
+        // 组键是代理 URL 的规范化形式： Url 解析补全路径，不同写法归一到同组。
+        let proxy = proxy("http://user:pass@127.0.0.1:18080");
+        assert_eq!(
+            CodexInstallationIdDeriver::group_key(Some(&proxy)),
+            "http://user:pass@127.0.0.1:18080/"
+        );
+    }
+
+    #[test]
+    fn egress_grouped_derivation_is_deterministic_per_group() {
+        let deriver = deriver();
+        let first = deriver.derive_for_group("direct");
+        let second = deriver.derive_for_group("direct");
+        assert_eq!(first, second);
+        // 不同部署密钥必须派生不同值：换一个密钥文件隔离验证。
+        let other = CodexInstallationIdDeriver::load_or_create(std::path::Path::new(
+            "/tmp/codex-installation-id-deriver-test-secret-2",
+        ))
+        .expect("identity");
+        assert_ne!(first, other.derive_for_group("direct"));
+    }
+
+    #[test]
+    fn egress_grouped_derivation_differs_across_groups() {
+        let deriver = deriver();
+        let direct = deriver.derive_for_group("direct");
+        let proxy_a = deriver.derive_for_group("http://127.0.0.1:18080");
+        let proxy_b = deriver.derive_for_group("socks5h://127.0.0.1:1080");
+        assert_ne!(direct, proxy_a);
+        assert_ne!(proxy_a, proxy_b);
+        assert_ne!(direct, proxy_b);
+    }
+
+    #[test]
+    fn derived_installation_ids_pass_uuid_v4_validation() {
+        let deriver = deriver();
+        for group_key in ["direct", "http://127.0.0.1:18080", "socks5h://[::1]:1080"] {
+            let value = deriver.derive_for_group(group_key);
+            let uuid = Uuid::parse_str(&value).expect("uuid v4 parse");
+            assert_eq!(uuid.get_version_num(), 4);
+            assert_eq!(value, uuid.hyphenated().to_string());
+        }
+    }
+
+    #[test]
+    fn per_account_strategy_keeps_random_generation() {
+        let deriver = deriver();
+        let first = deriver
+            .derive_observed(ProviderInstallationIdStrategy::PerAccount, None)
+            .value;
+        let second = deriver
+            .derive_observed(ProviderInstallationIdStrategy::PerAccount, None)
+            .value;
+        assert_ne!(first, second);
+        for value in [first, second] {
+            assert_eq!(Uuid::parse_str(&value).expect("uuid").get_version_num(), 4);
+        }
+    }
+
+    #[test]
+    fn egress_grouped_strategy_follows_proxy_group() {
+        let deriver = deriver();
+        let proxy = proxy("http://127.0.0.1:18080");
+        let via_derive = deriver
+            .derive_observed(ProviderInstallationIdStrategy::EgressGrouped, Some(&proxy))
+            .value;
+        assert_eq!(
+            via_derive,
+            deriver.derive_for_group("http://127.0.0.1:18080/")
+        );
+        let direct = deriver
+            .derive_observed(ProviderInstallationIdStrategy::EgressGrouped, None)
+            .value;
+        assert_eq!(direct, deriver.derive_for_group("direct"));
+        assert_ne!(direct, via_derive);
+    }
+
+    #[test]
+    fn derive_observed_reports_strategy_and_fingerprint() {
+        let deriver = deriver();
+        let grouped = deriver.derive_observed(
+            ProviderInstallationIdStrategy::EgressGrouped,
+            Some(&proxy("http://127.0.0.1:18080")),
+        );
+        assert_eq!(
+            grouped.strategy,
+            ProviderInstallationIdStrategy::EgressGrouped
+        );
+        assert_eq!(
+            grouped.fingerprint,
+            CodexInstallationIdDeriver::group_fingerprint("http://127.0.0.1:18080/")
+        );
+    }
+
+    #[test]
+    fn group_fingerprint_is_stable_and_non_reversible_prefix() {
+        assert_eq!(
+            CodexInstallationIdDeriver::group_fingerprint("direct"),
+            CodexInstallationIdDeriver::group_fingerprint("direct")
+        );
+        assert_ne!(
+            CodexInstallationIdDeriver::group_fingerprint("direct"),
+            CodexInstallationIdDeriver::group_fingerprint("http://127.0.0.1:18080")
+        );
+        assert_eq!(
+            CodexInstallationIdDeriver::group_fingerprint("direct").len(),
+            8
+        );
+    }
+
+    /// 策略读取失败必须让操作失败而不是静默回退 per-account；
+    /// 这里验证端口语义：默认实现返回 PerAccount。
+    #[tokio::test]
+    async fn runtime_policy_default_strategy_is_per_account() {
+        struct DefaultPolicy;
+        impl ProviderRuntimePolicyPort for DefaultPolicy {
+            fn load_refresh_policy(
+                &self,
+            ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+                Box::pin(async {
+                    ProviderRefreshPolicy::try_new(
+                        std::time::Duration::from_secs(60),
+                        NonZeroU32::new(2).expect("positive"),
+                    )
+                })
+            }
+        }
+        let strategy = DefaultPolicy
+            .load_installation_id_strategy()
+            .await
+            .expect("default strategy");
+        assert_eq!(strategy, ProviderInstallationIdStrategy::PerAccount);
+    }
+
+    #[test]
+    fn strategy_values_round_trip_through_parse() {
+        for strategy in [
+            ProviderInstallationIdStrategy::PerAccount,
+            ProviderInstallationIdStrategy::EgressGrouped,
+        ] {
+            assert_eq!(
+                ProviderInstallationIdStrategy::parse(strategy.as_str()),
+                Some(strategy)
+            );
+        }
+        assert_eq!(ProviderInstallationIdStrategy::parse("per_account"), None);
+        assert_eq!(ProviderInstallationIdStrategy::parse(""), None);
+    }
+}
