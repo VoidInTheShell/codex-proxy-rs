@@ -636,6 +636,7 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 | --- | --- | --- | --- |
 | `GET` | `/api/admin/proxies` | `page`、`pageSize`（1-200）、`search`（名称） | `{ items, page }` |
 | `GET` | `/api/admin/proxies/accounts` | `proxyId`、`page`、`pageSize`（1-200）、`search`（账号名称或邮箱） | `{ items, page }` |
+| `GET` | `/api/admin/proxies/egress-distribution` | 无 | 账号 × 出口分布与共享标记，见下文 |
 | `POST` | `/api/admin/proxies/accounts/remove` | `{ proxyId, accountId }` | `{ configRevision }` |
 | `POST` | `/api/admin/proxies/create` | `{ name, proxyUrl, location?, autoLocation? }` | `201 { record, configRevision }` |
 | `POST` | `/api/admin/proxies/update` | `{ id, revision, name, proxyUrl?, location?, autoLocation? }` | `{ record, configRevision }` |
@@ -653,6 +654,16 @@ Images、独立 Search 及管理员连接测试不受该文本模型限制；连
 `authenticationKind`、`planType`、`planTypeDisplay` 和 `groups: [{ id, name, color, enabled }]`，
 不返回账号凭据。默认每页 20 条，按名称、ID 稳定排序；搜索不区分大小写，匹配名称或邮箱的字面子串。
 不存在的代理返回 404，未绑定账号或没有匹配结果时返回空页。数量与当前页对应同一查询快照
+
+出口分布把全部账号按出口分组：未绑定代理的账号为「直连」一组（共享部署机出口），
+绑定代理的账号按 `outbound_proxies` 记录各为一组（相同 URL 的代理已由迁移归并为同一记录，不按 URL 字符串分组）。
+响应包含 `alertEnabled`、`alertThreshold` 与 `groups`；每个分组携带 `kind`（`direct` / `proxy`）、
+`proxyId`、`name`、`endpoint`（脱敏）、`location`（生效位置）、`exitIp`（最近一次测试的出口 IP）、
+`accountCount`、`accounts: [{ id, name, provider, enabled }]` 与 `alerting`。
+直连组的代理字段为 `null`，且不做出口 IP 探测——直连出口即部署机网络，主动探测只增加对第三方的可观测流量；
+代理组复用已有位置与测试结果，不新增探测。分组按账号数降序排列，共享最多的组在前；
+未绑定任何账号的代理不出现。`alerting` 由服务端按「启用提醒且组内账号数 ≥ 阈值」判定，
+只做提示不拦截绑定，绑定与导入行为不受影响
 
 移除关联账号只清除指定账号的代理绑定与连接地址，使其改为直连，保留凭据、调度参数与分组。
 若账号已不再绑定请求中的代理，则返回 409
@@ -1241,6 +1252,8 @@ accountAutoFreezeAdaptiveConcurrency
 accountWarmupEnabled
 accountWarmupScheduleTime
 accountWarmupModel
+egressSharingAlertEnabled
+egressSharingAlertThreshold
 ```
 
 定时账号预热默认关闭。`accountWarmupScheduleTime` 使用部署时区中的 `HH:MM`，
@@ -1473,6 +1486,14 @@ User-Agent 使用 `grok-shell/<版本> (<系统>; <架构>)`，其中 `arm64` �
 选择账号可用的第一个模型。`accountAutoFreezeAdaptiveConcurrency` 开启时冻结期间把账号并发上限下调到
 观测在途峰值的 80%（下限 2，只降不升）。这会持久修改账号并发设置；跟随全局默认的账号也会设为独立上限，
 解冻后不自动恢复，管理员可手动改回
+
+### 出口共享提醒
+
+出口共享提醒（`egressSharingAlertEnabled`）默认开启。启用时，账号 × 出口分布视图按
+`egressSharingAlertThreshold` 判定分组标记：组内账号数达到阈值时该分组显著标记（含直连组）。
+`egressSharingAlertThreshold` 取值 2～1,000，默认 2——同出口出现 2 个账号即为真实共享，
+与部署实测的最高风险暴露一致；下限 2 保证单账号独占出口不会被标记。
+提醒只影响展示，不改变账号绑定、导入与调度行为；关闭后分组事实照常返回，仅停用标记
 
 ### Windows 客户端下载
 

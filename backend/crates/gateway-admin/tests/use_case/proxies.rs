@@ -56,6 +56,9 @@ impl ProxyStore for TestProxies {
     async fn list(&self, _: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
         Err(super::unavailable("proxy"))
     }
+    async fn egress_facts(&self) -> AdminStoreResult<EgressFacts> {
+        Err(super::unavailable("proxy"))
+    }
     async fn list_accounts(
         &self,
         query: ProxyAccountListQuery,

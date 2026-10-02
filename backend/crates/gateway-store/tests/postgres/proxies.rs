@@ -1201,3 +1201,94 @@ async fn automatic_proxy_location_projects_to_accounts_and_guards_refresh_result
     );
     database.close().await;
 }
+
+#[tokio::test]
+async fn egress_facts_return_bindings_and_masked_proxy_summaries() {
+    let Some(database) = TestDatabase::create("egress_facts").await else {
+        return;
+    };
+    let proxies = PgProxyRepository::new(database.pool.clone());
+    let accounts = PgProviderAccountRepository::new(database.pool.clone());
+    let shared = proxies
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: None,
+                location: Some(
+                    serde_json::from_value(serde_json::json!({
+                        "country":"JP", "region":"Tokyo", "city":"Tokyo", "timezone":"Asia/Tokyo"
+                    }))
+                    .unwrap(),
+                ),
+                name: "共享代理".to_owned(),
+                proxy: OutboundProxy::parse("http://user:secret@127.0.0.1:18080").unwrap(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    proxies
+        .record_test(&shared.id, shared.revision, success(), &context())
+        .await
+        .unwrap();
+    let solo = proxies
+        .create(
+            NewProxy {
+                auto_location: false,
+                test: None,
+                location: None,
+                name: "独占代理".to_owned(),
+                proxy: OutboundProxy::parse("http://127.0.0.1:18081").unwrap(),
+            },
+            &context(),
+        )
+        .await
+        .unwrap()
+        .record;
+    for (id, proxy) in [
+        ("acct_shared_1", Some(shared.proxy.clone())),
+        ("acct_shared_2", Some(shared.proxy.clone())),
+        ("acct_solo", Some(solo.proxy.clone())),
+        ("acct_direct_1", None),
+        ("acct_direct_2", None),
+    ] {
+        let mut input = account(id, id);
+        input.outbound_proxy = proxy;
+        accounts.insert_provider_account(input).await.unwrap();
+    }
+    let facts = proxies.egress_facts().await.unwrap();
+    // 直连账号无代理绑定；同 URL 账号经 0005 归并指向同一条代理记录。
+    let bindings: std::collections::BTreeMap<_, _> = facts
+        .accounts
+        .iter()
+        .map(|binding| (binding.id.as_str(), binding.proxy_id.clone()))
+        .collect();
+    assert_eq!(bindings["acct_direct_1"], None);
+    assert_eq!(bindings["acct_direct_2"], None);
+    assert_eq!(bindings["acct_shared_1"], bindings["acct_shared_2"]);
+    assert_eq!(bindings["acct_shared_1"], Some(shared.id.clone()));
+    assert_eq!(bindings["acct_solo"], Some(solo.id.clone()));
+
+    let summaries: std::collections::BTreeMap<_, _> = facts
+        .proxies
+        .iter()
+        .map(|fact| (fact.id.as_str(), fact))
+        .collect();
+    let shared_fact = summaries[shared.id.as_str()];
+    // 摘要只返回脱敏地址与生效位置，不携带代理认证信息。
+    assert_eq!(shared_fact.endpoint, "http://127.0.0.1:18080/");
+    assert!(shared_fact.endpoint != shared.proxy.expose_url());
+    assert_eq!(
+        shared_fact.location.as_ref().map(|l| l.country.as_str()),
+        Some("JP")
+    );
+    assert_eq!(
+        shared_fact.exit_ip.map(|ip| ip.to_string()),
+        Some("203.0.113.5".to_owned())
+    );
+    let solo_fact = summaries[solo.id.as_str()];
+    assert_eq!(solo_fact.location, None);
+    assert_eq!(solo_fact.exit_ip, None);
+    database.close().await;
+}

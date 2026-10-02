@@ -1,4 +1,4 @@
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::{
@@ -84,8 +84,64 @@ async fn proxy_location_rejects_invalid_and_incomplete_input() {
     assert!(created["data"]["record"]["location"].is_null());
 }
 
+/// 账号 × 出口分布 API 测试默认事实：两个直连账号、两个共享同一代理、一个独占另一代理。
+fn test_egress_facts() -> EgressFacts {
+    let location: gateway_core::account::RequestLocation = serde_json::from_value(json!({
+        "country": "JP", "region": "Tokyo", "city": "Tokyo", "timezone": "Asia/Tokyo"
+    }))
+    .unwrap();
+    EgressFacts {
+        accounts: vec![
+            binding("acct_direct_1", "直连一号", None),
+            binding("acct_direct_2", "直连二号", None),
+            binding("acct_shared_1", "共享一号", Some("proxy_shared")),
+            binding("acct_shared_2", "共享二号", Some("proxy_shared")),
+            binding("acct_solo", "独占账号", Some("proxy_solo")),
+        ],
+        proxies: vec![
+            EgressProxyFact {
+                id: "proxy_shared".to_owned(),
+                name: "共享代理".to_owned(),
+                endpoint: "http://proxy.shared.example:8080".to_owned(),
+                location: Some(location),
+                exit_ip: Some("203.0.113.2".parse().unwrap()),
+            },
+            EgressProxyFact {
+                id: "proxy_solo".to_owned(),
+                name: "独占代理".to_owned(),
+                endpoint: "http://proxy.solo.example:1080".to_owned(),
+                location: None,
+                exit_ip: None,
+            },
+        ],
+    }
+}
+
+fn binding(id: &str, name: &str, proxy_id: Option<&str>) -> EgressAccountBinding {
+    EgressAccountBinding {
+        id: id.to_owned(),
+        name: name.to_owned(),
+        provider_kind: "openai".to_owned(),
+        enabled: true,
+        proxy_id: proxy_id.map(str::to_owned),
+    }
+}
+
 #[derive(Default)]
-pub(super) struct MemoryProxies(Mutex<Option<ProxyRecord>>);
+pub(super) struct MemoryProxies {
+    record: Mutex<Option<ProxyRecord>>,
+    egress: Mutex<Option<EgressFacts>>,
+}
+
+impl MemoryProxies {
+    /// 指定出口分布事实；未指定时使用默认测试事实。
+    pub(super) fn with_egress_facts(facts: EgressFacts) -> Self {
+        Self {
+            record: Mutex::new(None),
+            egress: Mutex::new(Some(facts)),
+        }
+    }
+}
 
 fn missing() -> AdminStoreError {
     AdminStoreError::new(AdminStoreErrorKind::NotFound, "proxy", "missing proxy")
@@ -116,7 +172,7 @@ impl ProxyStore for MemoryProxies {
         Err(missing())
     }
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage> {
-        let items: Vec<_> = self.0.lock().unwrap().iter().cloned().collect();
+        let items: Vec<_> = self.record.lock().unwrap().iter().cloned().collect();
         Ok(ProxyPage {
             total: u64::try_from(items.len()).unwrap(),
             items,
@@ -125,14 +181,22 @@ impl ProxyStore for MemoryProxies {
         })
     }
     async fn get(&self, _: &str) -> AdminStoreResult<ProxyRecord> {
-        self.0.lock().unwrap().clone().ok_or_else(missing)
+        self.record.lock().unwrap().clone().ok_or_else(missing)
+    }
+    async fn egress_facts(&self) -> AdminStoreResult<EgressFacts> {
+        Ok(self
+            .egress
+            .lock()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(test_egress_facts))
     }
     async fn list_accounts(
         &self,
         query: ProxyAccountListQuery,
     ) -> AdminStoreResult<ProxyAccountPage> {
         if !self
-            .0
+            .record
             .lock()
             .unwrap()
             .as_ref()
@@ -181,7 +245,7 @@ impl ProxyStore for MemoryProxies {
             record.last_test = Some(result);
             record.last_test_at = Some(Utc::now());
         }
-        *self.0.lock().unwrap() = Some(record.clone());
+        *self.record.lock().unwrap() = Some(record.clone());
         Ok(ProxyMutation {
             config_revision: record.revision,
             record,
@@ -192,7 +256,7 @@ impl ProxyStore for MemoryProxies {
         command: UpdateProxy,
         _: &MutationContext,
     ) -> AdminStoreResult<ProxyMutation> {
-        let mut stored = self.0.lock().unwrap();
+        let mut stored = self.record.lock().unwrap();
         let record = stored.as_mut().ok_or_else(missing)?;
         record.name = command.name;
         if let Some(auto_location) = command.auto_location {
@@ -227,7 +291,7 @@ impl ProxyStore for MemoryProxies {
         _: Revision,
         _: &MutationContext,
     ) -> AdminStoreResult<Revision> {
-        self.0.lock().unwrap().take().ok_or_else(missing)?;
+        self.record.lock().unwrap().take().ok_or_else(missing)?;
         Ok(Revision::new(3).unwrap())
     }
     async fn record_test(
@@ -237,7 +301,7 @@ impl ProxyStore for MemoryProxies {
         result: ProxyTestResult,
         _: &MutationContext,
     ) -> AdminStoreResult<ProxyMutation> {
-        let mut stored = self.0.lock().unwrap();
+        let mut stored = self.record.lock().unwrap();
         let record = stored.as_mut().ok_or_else(missing)?;
         record.detected_location = record.detected_location_after_test(&result);
         record.last_test = Some(result);
@@ -720,4 +784,87 @@ async fn manual_proxy_can_detect_location_once_without_enabling_auto_location() 
         record["lastTest"]["location"]["location"]["timezone"],
         "Asia/Tokyo"
     );
+}
+
+#[tokio::test]
+async fn egress_distribution_groups_accounts_and_marks_shared_egress() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let (status, body) = request(
+        &fixture,
+        "/api/admin/proxies/egress-distribution",
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let data = &body["data"];
+    assert_eq!(data["alertEnabled"], true);
+    assert_eq!(data["alertThreshold"], 2);
+    let groups = data["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 3, "零绑定代理不应出现在分布视图");
+
+    let direct = &groups[0];
+    assert_eq!(direct["kind"], "direct");
+    assert_eq!(direct["proxyId"], Value::Null);
+    assert_eq!(direct["name"], Value::Null);
+    assert_eq!(direct["endpoint"], Value::Null);
+    assert_eq!(direct["location"], Value::Null);
+    assert_eq!(direct["exitIp"], Value::Null);
+    assert_eq!(direct["accountCount"], 2);
+    assert_eq!(direct["alerting"], true);
+    assert_eq!(
+        direct["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|account| account["name"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["直连一号", "直连二号"]
+    );
+
+    let shared = &groups[1];
+    assert_eq!(shared["kind"], "proxy");
+    assert_eq!(shared["proxyId"], "proxy_shared");
+    assert_eq!(shared["name"], "共享代理");
+    assert_eq!(shared["endpoint"], "http://proxy.shared.example:8080");
+    assert_eq!(shared["location"]["country"], "JP");
+    assert_eq!(shared["location"]["timezone"], "Asia/Tokyo");
+    assert_eq!(shared["exitIp"], "203.0.113.2");
+    assert_eq!(shared["accountCount"], 2);
+    assert_eq!(shared["alerting"], true);
+
+    let solo = &groups[2];
+    assert_eq!(solo["proxyId"], "proxy_solo");
+    assert_eq!(solo["accountCount"], 1);
+    assert_eq!(solo["alerting"], false, "未达到阈值的分组不应标记");
+
+    // 出口分布视图要求管理员会话。
+    let (status, _) = request(
+        &fixture,
+        "/api/admin/proxies/egress-distribution",
+        None,
+        false,
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn egress_distribution_returns_empty_groups_without_accounts() {
+    let fixture = AdminTestFixture::with_proxies(Arc::new(MemoryProxies::with_egress_facts(
+        Default::default(),
+    )))
+    .await;
+    fixture.auth.insert_session("valid-session");
+    let (status, body) = request(
+        &fixture,
+        "/api/admin/proxies/egress-distribution",
+        None,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["data"]["groups"], json!([]));
+    assert_eq!(body["data"]["alertEnabled"], true);
 }

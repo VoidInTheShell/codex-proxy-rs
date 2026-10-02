@@ -304,6 +304,8 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 account_warmup_enabled: false,
                 account_warmup_schedule_time: "08:00".to_owned(),
                 account_warmup_model: None,
+                egress_sharing_alert_enabled: true,
+                egress_sharing_alert_threshold: 2,
             },
         )
         .await

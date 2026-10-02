@@ -10,6 +10,7 @@ import AccountWarmupCard from './components/AccountWarmupCard.vue'
 import SettingsBackupSection from './components/backup/SettingsBackupSection.vue'
 import ClientProfileCard from './components/ClientProfileCard.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
+import EgressSharingAlertCard from './components/EgressSharingAlertCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
@@ -69,6 +70,7 @@ const {
   accountAutoFreezeThresholdValue,
   accountAutoFreezeWindowSecondsValue,
   accountAutoFreezeDurationSecondsValue,
+  egressSharingAlertThresholdValue,
 
   minCodexDesktopVersionError,
   minCodexCliVersionError,
@@ -172,6 +174,10 @@ watch(section, (value) => {
             v-model:enabled="form.accountWarmupEnabled"
             v-model:schedule-time="form.accountWarmupScheduleTime"
             v-model:model="form.accountWarmupModel"
+          />
+          <EgressSharingAlertCard
+            v-model:enabled="form.egressSharingAlertEnabled"
+            v-model:threshold="egressSharingAlertThresholdValue"
           />
         </template>
 

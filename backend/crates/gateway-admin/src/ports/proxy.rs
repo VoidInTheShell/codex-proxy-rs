@@ -5,8 +5,8 @@ use super::store::AdminStoreResult;
 use crate::model::{
     MutationContext, Revision,
     proxies::{
-        ImportProxyBinding, NewProxy, ProxyAccountListQuery, ProxyAccountPage, ProxyListQuery,
-        ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
+        EgressFacts, ImportProxyBinding, NewProxy, ProxyAccountListQuery, ProxyAccountPage,
+        ProxyListQuery, ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
     },
 };
 
@@ -15,6 +15,8 @@ pub trait ProxyStore: Send + Sync {
     /// 在凭据交换到提交期间保护选定代理的连接配置和测试结果。
     async fn reserve_import(&self, id: &str) -> AdminStoreResult<ProxyImportReservation>;
     async fn list(&self, query: ProxyListQuery) -> AdminStoreResult<ProxyPage>;
+    /// 只读出口分布事实：全量账号绑定与全部代理摘要；分组与阈值判定在用例层完成。
+    async fn egress_facts(&self) -> AdminStoreResult<EgressFacts>;
     async fn list_accounts(
         &self,
         query: ProxyAccountListQuery,
