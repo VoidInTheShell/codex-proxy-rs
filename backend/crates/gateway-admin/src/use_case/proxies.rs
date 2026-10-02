@@ -19,7 +19,7 @@ use crate::{
     ports::{
         provider::ProviderAdminRegistry,
         proxy::{ProxyProbe, ProxyStore},
-        store::AdminStoreErrorKind,
+        store::{AdminStoreErrorKind, SettingsStore},
     },
 };
 
@@ -30,6 +30,8 @@ pub trait ProxiesService: Send + Sync {
         &self,
         query: ProxyAccountListQuery,
     ) -> Result<ProxyAccountPage, AdminError>;
+    /// 只读账号 × 出口分布：直连与每条代理记录各为一组，超阈值分组显著标记。
+    async fn egress_distribution(&self) -> Result<EgressDistribution, AdminError>;
     async fn remove_account(
         &self,
         proxy_id: &str,
@@ -69,6 +71,7 @@ pub trait ProxiesService: Send + Sync {
 
 pub(crate) struct DefaultProxiesService {
     store: Arc<dyn ProxyStore>,
+    settings: Arc<dyn SettingsStore>,
     probe: Arc<dyn ProxyProbe>,
     snapshot: Arc<dyn SnapshotControl>,
     providers: ProviderAdminRegistry,
@@ -78,12 +81,14 @@ pub(crate) struct DefaultProxiesService {
 impl DefaultProxiesService {
     pub(crate) fn new(
         store: Arc<dyn ProxyStore>,
+        settings: Arc<dyn SettingsStore>,
         probe: Arc<dyn ProxyProbe>,
         snapshot: Arc<dyn SnapshotControl>,
         providers: ProviderAdminRegistry,
     ) -> Self {
         Self {
             store,
+            settings,
             probe,
             snapshot,
             providers,
@@ -178,6 +183,24 @@ impl ProxiesService for DefaultProxiesService {
             .list(query)
             .await
             .map_err(|error| map_store_error(error, "proxy"))
+    }
+
+    async fn egress_distribution(&self) -> Result<EgressDistribution, AdminError> {
+        let facts = self
+            .store
+            .egress_facts()
+            .await
+            .map_err(|error| map_store_error(error, "proxy"))?;
+        let settings = self
+            .settings
+            .load_runtime_settings()
+            .await
+            .map_err(|error| map_store_error(error, "runtime settings"))?;
+        Ok(egress_distribution(
+            facts,
+            settings.egress_sharing_alert_enabled,
+            settings.egress_sharing_alert_threshold,
+        ))
     }
 
     async fn create(
@@ -310,4 +333,102 @@ fn validate_name(value: &str) -> Result<String, AdminError> {
         return Err(AdminError::invalid("代理名称需要 1 至 100 个字符"));
     }
     Ok(value.to_owned())
+}
+
+/// 把出口事实聚合为分组视图：直连（`proxy_id` 为空）与每条代理记录各为一组，
+/// 只保留至少绑定一个账号的组；阈值判定 `alerting = alert_enabled && 账号数 ≥ 阈值`。
+/// 以代理事实为驱动建组，孤立绑定在外键 on delete restrict 下不存在。
+pub(crate) fn egress_distribution(
+    facts: EgressFacts,
+    alert_enabled: bool,
+    alert_threshold: u32,
+) -> EgressDistribution {
+    // 分组键与 P2-3 的出口分组定义保持一致：直连为一组、同代理记录 ID 为一组。
+    let mut direct: Vec<EgressGroupAccountRef> = Vec::new();
+    let mut by_proxy: std::collections::BTreeMap<&str, Vec<EgressGroupAccountRef>> =
+        std::collections::BTreeMap::new();
+    for binding in &facts.accounts {
+        let reference = EgressGroupAccountRef {
+            id: binding.id.clone(),
+            name: binding.name.clone(),
+            provider_kind: binding.provider_kind.clone(),
+            enabled: binding.enabled,
+        };
+        match binding.proxy_id.as_deref() {
+            None => direct.push(reference),
+            Some(proxy_id) => by_proxy.entry(proxy_id).or_default().push(reference),
+        }
+    }
+    // 不依赖存储层排序：分组事实可能来自任意实现，组内按（名称, ID）稳定排序。
+    let sort_accounts = |mut accounts: Vec<EgressGroupAccountRef>| {
+        accounts.sort_by(|left, right| {
+            left.name
+                .cmp(&right.name)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        accounts
+    };
+    // 关闭提醒时不标记，但分组与账号事实照常返回，视图保持可见。
+    let alerting =
+        |account_count: u64| alert_enabled && account_count >= u64::from(alert_threshold);
+    let group = |kind: EgressGroupKind,
+                 proxy_id: Option<String>,
+                 name: Option<String>,
+                 endpoint: Option<String>,
+                 location: Option<gateway_core::account::RequestLocation>,
+                 exit_ip: Option<std::net::IpAddr>,
+                 accounts: Vec<EgressGroupAccountRef>| {
+        let account_count = accounts.len() as u64;
+        EgressGroup {
+            account_count,
+            accounts,
+            alerting: alerting(account_count),
+            kind,
+            proxy_id,
+            name,
+            endpoint,
+            location,
+            exit_ip,
+        }
+    };
+    let mut groups: Vec<EgressGroup> = Vec::new();
+    if !direct.is_empty() {
+        groups.push(group(
+            EgressGroupKind::Direct,
+            None,
+            None,
+            None,
+            None,
+            None,
+            sort_accounts(direct),
+        ));
+    }
+    for fact in &facts.proxies {
+        let Some(accounts) = by_proxy.remove(fact.id.as_str()) else {
+            continue;
+        };
+        groups.push(group(
+            EgressGroupKind::Proxy,
+            Some(fact.id.clone()),
+            Some(fact.name.clone()),
+            Some(fact.endpoint.clone()),
+            fact.location.clone(),
+            fact.exit_ip,
+            sort_accounts(accounts),
+        ));
+    }
+    // 共享账号最多的组排最前（风险优先），同数时直连组在前、再按代理名稳定排序。
+    groups.sort_by(|left, right| {
+        right
+            .account_count
+            .cmp(&left.account_count)
+            .then_with(|| left.kind.cmp(&right.kind))
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.proxy_id.cmp(&right.proxy_id))
+    });
+    EgressDistribution {
+        groups,
+        alert_enabled,
+        alert_threshold,
+    }
 }

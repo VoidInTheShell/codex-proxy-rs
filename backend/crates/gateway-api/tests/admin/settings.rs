@@ -69,7 +69,9 @@ fn update_body() -> Value {
         "accountAutoFreezeAdaptiveConcurrency": true,
         "accountWarmupEnabled": false,
         "accountWarmupScheduleTime": "08:00",
-        "accountWarmupModel": null
+        "accountWarmupModel": null,
+        "egressSharingAlertEnabled": true,
+        "egressSharingAlertThreshold": 2
     })
 }
 
@@ -189,6 +191,20 @@ fn settings_request_should_reject_non_semver_client_min() {
 }
 
 #[test]
+fn settings_request_should_reject_out_of_range_egress_sharing_threshold() {
+    for threshold in [json!(1), json!(1001), json!(0)] {
+        let mut body = update_body();
+        body["egressSharingAlertThreshold"] = threshold;
+        let request: UpdateRuntimeSettingsRequest =
+            serde_json::from_value(body).expect("decode settings");
+        assert_eq!(
+            request.validate().unwrap_err().field(),
+            "egressSharingAlertThreshold"
+        );
+    }
+}
+
+#[test]
 fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use std::collections::BTreeMap;
 
@@ -240,6 +256,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        egress_sharing_alert_enabled: true,
+        egress_sharing_alert_threshold: 2,
         updated_at: Utc
             .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
             .single()
@@ -291,6 +309,8 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "accountWarmupEnabled": false,
                 "accountWarmupScheduleTime": "08:00",
                 "accountWarmupModel": null,
+                "egressSharingAlertEnabled": true,
+                "egressSharingAlertThreshold": 2,
                 "updatedAt": "2026-08-02T10:30:00Z",
                 "updatedAtDisplay": "2026-08-02 18:30:00"
         })
@@ -360,6 +380,8 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        egress_sharing_alert_enabled: true,
+        egress_sharing_alert_threshold: 2,
         updated_at: chrono::Utc::now(),
     };
 

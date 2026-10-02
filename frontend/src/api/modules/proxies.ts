@@ -67,6 +67,39 @@ interface ProxyAccountPage {
   page: ProxyPage['page']
 }
 
+export interface EgressGroupAccount {
+  id: string
+  name: string
+  provider: string
+  enabled: boolean
+}
+
+export interface EgressGroup {
+  kind: 'direct' | 'proxy'
+  proxyId: string | null
+  name: string | null
+  endpoint: string | null
+  location: RequestLocation | null
+  exitIp: string | null
+  accountCount: number
+  accounts: EgressGroupAccount[]
+  alerting: boolean
+}
+
+export interface EgressDistribution {
+  groups: EgressGroup[]
+  alertEnabled: boolean
+  alertThreshold: number
+}
+
+export function getEgressDistribution(options: RequestOptions = {}) {
+  return request<EgressDistribution>({
+    url: '/api/admin/proxies/egress-distribution',
+    method: 'GET',
+    ...options,
+  })
+}
+
 export function getProxyAccounts(data: { proxyId: string, page: number, pageSize: number, search?: string }, options: RequestOptions = {}) {
   return request<ProxyAccountPage>({
     url: '/api/admin/proxies/accounts',

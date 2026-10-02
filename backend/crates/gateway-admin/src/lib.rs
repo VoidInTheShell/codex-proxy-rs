@@ -482,6 +482,7 @@ async fn initialize_inner(
         key_usage,
         proxies: Arc::new(use_case::proxies::DefaultProxiesService::new(
             store.proxies(),
+            store.settings(),
             proxy_probe,
             snapshot.clone(),
             registry.clone(),
