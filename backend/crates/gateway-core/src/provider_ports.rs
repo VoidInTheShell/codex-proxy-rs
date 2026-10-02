@@ -1054,7 +1054,7 @@ pub enum ProviderInstallationIdStrategy {
 }
 
 impl ProviderInstallationIdStrategy {
-    /// 稳定值；与迁移 `0023_openai_installation_id_strategy.sql` 的 check 约束一致。
+    /// 稳定值；与迁移 `0024_openai_installation_id_strategy.sql` 的 check 约束一致。
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
