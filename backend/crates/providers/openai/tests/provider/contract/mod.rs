@@ -1176,6 +1176,7 @@ async fn create_account_with_enabled(store: &Arc<MemoryAccountStore>, id: &str, 
             name: id.to_owned(),
             secret: secret(&format!("at-{id}")),
             verified_account: profile(&format!("chatgpt-{id}")),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled,
         })

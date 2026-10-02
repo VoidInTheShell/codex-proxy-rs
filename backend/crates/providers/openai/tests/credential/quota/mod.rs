@@ -104,6 +104,7 @@ async fn create_account_with_enabled(
             name: account_id.to_owned(),
             secret: secret(&format!("token-{account_id}")),
             verified_account: profile(&format!("chatgpt-{account_id}")),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled,
         })
@@ -452,6 +453,7 @@ async fn quota_refresh_synchronizes_plan_changes_without_losing_subtypes() {
                 verified_account,
                 next_refresh_at: None,
                 enabled: true,
+                installation_id: uuid::Uuid::new_v4().to_string(),
             })
             .await;
         let before = store.account(account_id).unwrap();

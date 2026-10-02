@@ -23,8 +23,8 @@ use gateway_admin::{
             UsageListRecord, UsageOverview, UsagePage, UsageQuery,
         },
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
-            RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
     },
     ports::store::{AdminStoreResult, ObservabilityStore, SettingsStore},
@@ -958,6 +958,7 @@ impl SettingsStore for FixtureSettingsStore {
             account_warmup_model: None,
             egress_sharing_alert_enabled: true,
             egress_sharing_alert_threshold: 2,
+            openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         })
     }
 

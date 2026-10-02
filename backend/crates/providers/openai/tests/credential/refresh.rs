@@ -237,6 +237,7 @@ async fn seed_refreshable_account(
             verified_account,
             next_refresh_at: retry_not_before.map(DateTime::<Utc>::from),
             enabled: true,
+            installation_id: uuid::Uuid::new_v4().to_string(),
         })
         .await;
 }

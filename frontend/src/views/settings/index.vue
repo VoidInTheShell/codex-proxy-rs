@@ -11,13 +11,14 @@ import SettingsBackupSection from './components/backup/SettingsBackupSection.vue
 import ClientProfileCard from './components/ClientProfileCard.vue'
 import ConcurrencyPolicyCard from './components/ConcurrencyPolicyCard.vue'
 import EgressSharingAlertCard from './components/EgressSharingAlertCard.vue'
+import InstallationIdStrategyCard from './components/InstallationIdStrategyCard.vue'
 import ModelAliasesCard from './components/ModelAliasesCard.vue'
 import RequestLocationCard from './components/RequestLocationCard.vue'
 import RotationStrategyCard from './components/RotationStrategyCard.vue'
 import SettingsAccessSection from './components/SettingsAccessSection.vue'
 import TokenRefreshCard from './components/TokenRefreshCard.vue'
 import { useSettingsForm } from './composables/useSettingsForm'
-import { rotationOptions } from './constants'
+import { installationIdOptions, rotationOptions } from './constants'
 import PricingSection from './pricing/index.vue'
 
 const route = useRoute()
@@ -183,6 +184,11 @@ watch(section, (value) => {
 
         <div v-if="visited.has('upstream')" v-show="section === 'upstream'" class="grid min-w-0 gap-5">
           <TokenRefreshCard v-model:refresh-margin-seconds="refreshMarginSecondsValue" v-model:refresh-concurrency="refreshConcurrencyValue" />
+          <InstallationIdStrategyCard
+            v-model="form.openaiInstallationIdStrategy"
+            :disabled="disabled"
+            :options="installationIdOptions"
+          />
           <ClientProfileCard
             v-model="form.providerRequestProfiles"
             :active="section === 'upstream'"

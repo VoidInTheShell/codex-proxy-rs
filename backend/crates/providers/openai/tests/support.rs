@@ -1082,6 +1082,42 @@ impl ProviderRuntimePolicyPort for StaticFreezePolicy {
     }
 }
 
+/// installation_id 派生策略固定为 egress-grouped 的运行时策略 fake；
+/// 出口分组派生测试用。
+pub(crate) struct StaticInstallationIdStrategy(
+    pub(crate) gateway_core::provider_ports::ProviderInstallationIdStrategy,
+);
+
+#[async_trait::async_trait]
+impl ProviderRuntimePolicyPort for StaticInstallationIdStrategy {
+    fn load_refresh_policy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderRefreshPolicy, ProviderStoreError>> {
+        Box::pin(async {
+            ProviderRefreshPolicy::try_new(
+                Duration::from_secs(60 * 60),
+                NonZeroU32::new(2).expect("positive concurrency"),
+            )
+        })
+    }
+
+    fn load_installation_id_strategy(
+        &self,
+    ) -> BoxFuture<
+        '_,
+        Result<gateway_core::provider_ports::ProviderInstallationIdStrategy, ProviderStoreError>,
+    > {
+        Box::pin(async { Ok(self.0) })
+    }
+}
+
+/// 构造固定 installation_id 派生策略的策略端口。
+pub(crate) fn installation_strategy_port(
+    strategy: gateway_core::provider_ports::ProviderInstallationIdStrategy,
+) -> Arc<dyn ProviderRuntimePolicyPort> {
+    Arc::new(StaticInstallationIdStrategy(strategy))
+}
+
 pub(crate) fn secret(access_token: &str) -> CodexOAuthSecret {
     CodexOAuthSecret {
         access_token: SecretString::from(access_token.to_owned()),

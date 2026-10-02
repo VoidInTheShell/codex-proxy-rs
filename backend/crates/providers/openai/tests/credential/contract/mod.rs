@@ -50,6 +50,7 @@ fn create_account(store: &Arc<MemoryAccountStore>, id: &str, token: &str) {
         name: id.to_owned(),
         secret: secret(token),
         verified_account: profile(&format!("chatgpt-{id}")),
+        installation_id: uuid::Uuid::new_v4().to_string(),
         next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
         enabled: true,
     }));
@@ -302,6 +303,7 @@ fn codec_persists_tokens_as_plaintext_provider_json() {
     let encoded = CodexCredentialCodec::encode_new(
         &secret("literal-access-token"),
         &profile("chatgpt-literal"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .expect("encode plaintext credential");
@@ -343,12 +345,14 @@ fn codec_reimport_preserves_existing_installation_id_for_the_same_principal() {
     let existing = CodexCredentialCodec::encode_new(
         &secret("existing-access-token"),
         &profile("chatgpt-stable-installation"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .expect("existing credential");
     let incoming = CodexCredentialCodec::encode_new(
         &secret("incoming-access-token"),
         &profile("chatgpt-stable-installation"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .expect("incoming credential");
@@ -373,12 +377,14 @@ fn codec_reimport_preserves_installation_id_without_principal_validation() {
     let existing = CodexCredentialCodec::encode_new(
         &secret("existing-access-token"),
         &profile("chatgpt-existing-principal"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .expect("existing credential");
     let incoming = CodexCredentialCodec::encode_new(
         &secret("incoming-access-token"),
         &profile("chatgpt-incoming-principal"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .expect("incoming credential");
@@ -570,6 +576,7 @@ fn selector_uses_rotated_credentials_after_a_snapshot_conflict() {
                     CodexCredentialCodec::encode_new(
                         &secret("at-rotated"),
                         &profile("chatgpt-acct_primary"),
+                        uuid::Uuid::new_v4().to_string(),
                         Vec::new(),
                     )
                     .expect("rotated credential"),
@@ -1106,6 +1113,7 @@ async fn selector_waits_for_the_bound_account_token_refresh_instead_of_switching
         name: "acct_first".to_owned(),
         secret: secret("at-first"),
         verified_account: expired_profile,
+        installation_id: uuid::Uuid::new_v4().to_string(),
         next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(10)),
         enabled: true,
     }));
@@ -1148,6 +1156,7 @@ async fn selector_waits_for_the_bound_account_token_refresh_instead_of_switching
         CodexCredentialCodec::encode_new(
             &secret("at-refreshed"),
             &profile("chatgpt-acct_first"),
+            uuid::Uuid::new_v4().to_string(),
             Vec::new(),
         )
         .expect("refreshed credential"),
@@ -1366,6 +1375,7 @@ fn credential_expired_failure_keeps_expired_oauth_for_bounded_refresh_recovery()
         name: "acct_primary".to_owned(),
         secret: secret("at-primary"),
         verified_account: expired_profile,
+        installation_id: uuid::Uuid::new_v4().to_string(),
         next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(10)),
         enabled: true,
     }));
@@ -2457,6 +2467,7 @@ fn legacy_oauth_defaults_to_websocket_and_reimport_preserves_http() {
     let incoming = CodexCredentialCodec::encode_new(
         &secret("new-token"),
         &profile("chatgpt-transport"),
+        uuid::Uuid::new_v4().to_string(),
         Vec::new(),
     )
     .unwrap();

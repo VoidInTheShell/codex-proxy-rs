@@ -15,6 +15,7 @@ use gateway_admin::model::{
 use gateway_core::account::{
     LoadedCredential, NewProviderAccount, ProviderAccountId, ProviderAccountStore,
 };
+use gateway_core::provider_ports::ProviderInstallationIdStrategy;
 use secrecy::{ExposeSecret, SecretString};
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq as _;
@@ -25,6 +26,7 @@ use super::admin::{
     CodexCredentialAdmin, CodexCredentialAdminError, PreparedCodexCredentialRotation,
     UnresolvedCodexOAuthCredential,
 };
+use super::installation::{CodexInstallationIdDeriver, DerivedInstallationId};
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{
@@ -362,6 +364,10 @@ pub struct CodexOAuthAdminService {
     credentials: CodexCredentialAdmin,
     oauth_client_id: String,
     profile: CodexWireProfileState,
+    runtime_policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
+    // egress-grouped 策略下缺失派生器时授权启动直接报错，不静默回退随机
+    // installation_id（设备换新信号）；per-account 不依赖派生器。
+    installation: Option<CodexInstallationIdDeriver>,
 }
 
 struct CodexOAuthAuthorizationCommitGuard {
@@ -412,6 +418,7 @@ impl CodexOAuthAdminService {
         store: Arc<dyn ProviderAccountStore>,
         credentials: CodexCredentialAdmin,
         profile: CodexWireProfileState,
+        runtime_policy: Arc<dyn gateway_core::provider_ports::ProviderRuntimePolicyPort>,
     ) -> Self {
         Self {
             pending,
@@ -420,6 +427,8 @@ impl CodexOAuthAdminService {
             credentials,
             oauth_client_id: OFFICIAL_CODEX_OAUTH_CLIENT_ID.to_owned(),
             profile,
+            runtime_policy,
+            installation: None,
         }
     }
 
@@ -427,6 +436,47 @@ impl CodexOAuthAdminService {
     pub fn with_oauth_client_id(mut self, oauth_client_id: impl Into<String>) -> Self {
         self.oauth_client_id = oauth_client_id.into();
         self
+    }
+
+    /// 在生产组装时注入 installation_id 派生器（共享部署级密钥）。
+    #[must_use]
+    pub fn with_installation_derivation(
+        mut self,
+        installation: CodexInstallationIdDeriver,
+    ) -> Self {
+        self.installation = Some(installation);
+        self
+    }
+
+    /// 为新账号授权（Create）派生 installation_id；代理为授权请求的出口选择。
+    ///
+    /// 策略读取失败时报错，不静默回退（管理员已显式选择 egress-grouped 时
+    /// 随机会产生预期外的独立设备信号）；per-account 未装配派生器时保持
+    /// 历史随机行为（派生值本就不依赖密钥）；egress-grouped 缺派生器报错。
+    async fn derive_installation_id(
+        &self,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<String, CodexOAuthAdminError> {
+        let unavailable = || CodexOAuthAdminError::StorageUnavailable;
+        let strategy = self
+            .runtime_policy
+            .load_installation_id_strategy()
+            .await
+            .map_err(|_| unavailable())?;
+        let Some(installation) = self.installation.as_ref() else {
+            return match strategy {
+                ProviderInstallationIdStrategy::PerAccount => Ok(Uuid::new_v4().to_string()),
+                ProviderInstallationIdStrategy::EgressGrouped => Err(unavailable()),
+            };
+        };
+        let derived: DerivedInstallationId = installation.derive_observed(strategy, proxy);
+        tracing::info!(
+            target: "openai_installation_id",
+            strategy = derived.strategy.as_str(),
+            egress_group = %derived.fingerprint,
+            "OpenAI installation_id derived for new OAuth authorization"
+        );
+        Ok(derived.value)
     }
 }
 
@@ -438,7 +488,12 @@ impl CodexOAuthAdmin for CodexOAuthAdminService {
     ) -> Result<CodexOAuthAuthorizationStarted, CodexOAuthAdminError> {
         let (name, reauthorization, installation_id) = match command.mutation.target() {
             AuthorizationMutationTarget::Create { name } => {
-                (name.clone(), None, Uuid::new_v4().to_string())
+                // 新账号按当前策略与授权请求的出口分组派生；Reauthorize 复用
+                // 现有值（同设备重新登录，官方语义不变更安装身份）。
+                let installation_id = self
+                    .derive_installation_id(command.mutation.outbound_proxy())
+                    .await?;
+                (name.clone(), None, installation_id)
             }
             AuthorizationMutationTarget::Reauthorize { account_id } => {
                 let current = self

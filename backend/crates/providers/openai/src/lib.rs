@@ -100,6 +100,10 @@ pub async fn initialize(
     let session_identity = config
         .session_identity()
         .map_err(|_| OpenAiInitializeError::SessionIdentity)?;
+    // installation_id 出口分组派生器共享同一部署密钥；仅在凭据创建时使用，
+    // 与数据面 lc_ 会话锚点通过域分离标签隔离。
+    let installation_deriver =
+        credential::CodexInstallationIdDeriver::new(session_identity.clone());
     let http = build_reqwest_client().map_err(|_| OpenAiInitializeError::Transport)?;
     let desktop_release = Arc::new(CodexDesktopReleaseService::new(
         profile.clone(),
@@ -199,7 +203,8 @@ pub async fn initialize(
             Arc::clone(&leases),
             Arc::clone(&runtime_policy),
         )
-        .with_personal_access_token_client(token_client),
+        .with_personal_access_token_client(token_client)
+        .with_installation_derivation(installation_deriver.clone()),
     );
     let refresh = Arc::new(CodexCredentialRefreshService::new(
         repository,
@@ -219,8 +224,10 @@ pub async fn initialize(
             Arc::clone(&accounts),
             CodexCredentialAdmin,
             profile.clone(),
+            Arc::clone(&runtime_policy),
         )
-        .with_oauth_client_id(config.oauth_client_id()),
+        .with_oauth_client_id(config.oauth_client_id())
+        .with_installation_derivation(installation_deriver.clone()),
     );
     let admin_provider: Arc<dyn ProviderAdmin> = Arc::new(OpenAiAdminProvider::new(
         provider_kind,
@@ -232,6 +239,10 @@ pub async fn initialize(
             profile_statistics,
             quota: Arc::clone(&quota),
             catalog: Arc::clone(&catalog),
+            installation: crate::credential::installation::CodexInstallationAdminContext::new(
+                Arc::clone(&runtime_policy),
+                installation_deriver.clone(),
+            ),
         },
         websocket_pool,
         desktop_release_status,

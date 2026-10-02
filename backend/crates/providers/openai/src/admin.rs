@@ -82,6 +82,7 @@ pub(crate) struct OpenAiAdminProvider {
     profile_statistics: Arc<CodexCredentialProfileService>,
     quota: Arc<CodexCredentialQuotaService>,
     catalog: Arc<CodexCredentialCatalogService>,
+    installation: crate::credential::installation::CodexInstallationAdminContext,
     websocket_pool: Arc<CodexWebSocketPool>,
     desktop_release: CodexDesktopReleaseStatus,
 }
@@ -92,6 +93,7 @@ pub(crate) struct OpenAiAdminServices {
     pub(crate) profile_statistics: Arc<CodexCredentialProfileService>,
     pub(crate) quota: Arc<CodexCredentialQuotaService>,
     pub(crate) catalog: Arc<CodexCredentialCatalogService>,
+    pub(crate) installation: crate::credential::installation::CodexInstallationAdminContext,
 }
 
 impl OpenAiAdminProvider {
@@ -113,6 +115,7 @@ impl OpenAiAdminProvider {
             profile_statistics: services.profile_statistics,
             quota: services.quota,
             catalog: services.catalog,
+            installation: services.installation,
             websocket_pool,
             desktop_release,
         }
@@ -619,7 +622,7 @@ impl ProviderAdmin for OpenAiAdminProvider {
         &self,
         account_id: &ProviderAccountId,
     ) -> Result<Option<ProviderDocument>, ProviderAdminError> {
-        self.account(account_id).await?;
+        let account = self.account(account_id).await?;
         let current = self
             .accounts
             .load_current_credential(account_id)
@@ -627,13 +630,25 @@ impl ProviderAdmin for OpenAiAdminProvider {
             .map_err(map_store_error)?;
         let data = CodexCredentialCodec::decode_complete(&current.credential)
             .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Invalid))?;
+        // installation_id 对账报告：当前策略、账号出口分组指纹与是否匹配当前
+        // 分组的确定性派生值；策略读取失败时整个配置视图失败（账号详情本身
+        // 就依赖存储可用，不静默缩水报告）。
+        let installation = self
+            .installation
+            .report(data.installation_id(), account.outbound_proxy())
+            .await
+            .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
         let value = match data {
             crate::credential::CodexCredentialData::ApiKey(data) => {
-                serde_json::to_value(data.configuration())
-                    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?
+                let mut configuration = serde_json::to_value(data.configuration())
+                    .map_err(|_| provider_admin_error(ProviderAdminErrorKind::Internal))?;
+                if let Some(object) = configuration.as_object_mut() {
+                    object.insert("installationId".to_owned(), installation);
+                }
+                configuration
             }
             crate::credential::CodexCredentialData::OAuth(data) => {
-                serde_json::json!({"transport": data.transport})
+                serde_json::json!({"transport": data.transport, "installationId": installation})
             }
         };
         let object = value
@@ -1689,6 +1704,10 @@ fn map_credential_admin_error(error: CodexCredentialAdminError) -> ProviderAdmin
             Kind::Ambiguous,
             "令牌刷新结果未知，请先核对账号状态，不要立即重复刷新",
         ),
+        Error::InstallationPolicyUnavailable => (
+            Kind::Unavailable,
+            "installation_id 派生策略暂不可用，请检查设置存储后重试",
+        ),
     };
     let error = provider_admin_error(kind).with_public_message(public_message);
     match upstream_message {
@@ -1725,6 +1744,9 @@ const fn credential_admin_error_code(error: &CodexCredentialAdminError) -> &'sta
         CodexCredentialAdminError::RefreshUnavailable => "refresh_unavailable",
         CodexCredentialAdminError::RefreshUpstream { .. } => "refresh_upstream_failed",
         CodexCredentialAdminError::RefreshAmbiguous { .. } => "refresh_ambiguous",
+        CodexCredentialAdminError::InstallationPolicyUnavailable => {
+            "installation_policy_unavailable"
+        }
     }
 }
 

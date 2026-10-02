@@ -11,6 +11,7 @@ pub type ProviderRequestProfileUpdates =
 pub type ModelMappings = BTreeMap<String, String>;
 pub type Revision = NonZeroU64;
 pub type RotationStrategy = String;
+pub type ProviderInstallationIdStrategy = String;
 pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -48,6 +49,7 @@ pub struct RuntimeSettings {
     pub account_warmup_model: Option<String>,
     pub egress_sharing_alert_enabled: bool,
     pub egress_sharing_alert_threshold: u32,
+    pub openai_installation_id_strategy: String,
     pub updated_at: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -88,6 +90,7 @@ pub struct ReplaceRuntimeSettings {
     pub account_warmup_model: Option<String>,
     pub egress_sharing_alert_enabled: bool,
     pub egress_sharing_alert_threshold: u32,
+    pub openai_installation_id_strategy: String,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -286,6 +289,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             account_warmup_model: settings.account_warmup_model,
             egress_sharing_alert_enabled: settings.egress_sharing_alert_enabled,
             egress_sharing_alert_threshold: settings.egress_sharing_alert_threshold,
+            openai_installation_id_strategy: settings.openai_installation_id_strategy,
         }
     }
 }

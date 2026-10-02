@@ -49,8 +49,8 @@ use gateway_admin::{
         },
         quota_forecast_sampling::{QuotaForecastHistory, QuotaForecastUsage},
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
-            RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
     },
     ports::{
@@ -1135,6 +1135,7 @@ impl SettingsStore for StaticSettingsStore {
             account_warmup_model: None,
             egress_sharing_alert_enabled: true,
             egress_sharing_alert_threshold: 2,
+            openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
             updated_at: Utc::now(),
         })
     }

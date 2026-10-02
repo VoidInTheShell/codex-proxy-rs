@@ -90,9 +90,12 @@ pub enum CodexCredentialDataError {
 pub struct CodexCredentialCodec;
 
 impl CodexCredentialCodec {
+    /// 用调用方显式决定的 installation_id 建档；派生策略由上游
+    /// （`CodexInstallationIdDeriver`）统一决定，编码层不再隐式随机生成。
     pub fn encode_new(
         secret: &CodexOAuthSecret,
         account: &CodexAccountProfile,
+        installation_id: String,
         cookies: Vec<CodexCookie>,
     ) -> Result<PlaintextCredential, CodexCredentialDataError> {
         Self::encode_oauth(
@@ -101,7 +104,7 @@ impl CodexCredentialCodec {
                 oauth_subject: account.oauth_subject.clone(),
                 poid: account.poid.clone(),
             }),
-            uuid::Uuid::new_v4().to_string(),
+            installation_id,
             cookies,
         )
     }

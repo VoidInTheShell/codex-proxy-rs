@@ -74,6 +74,13 @@ impl CodexSessionIdentity {
             ))
         ));
     }
+
+    /// 以同一部署密钥计算域分离 HMAC；供凭据层确定性派生 installation_id
+    /// 等安装级身份使用。调用方必须自带与 `local-conversation` 不同的域分离标签，
+    /// 避免与旧版会话锚点派生重叠。
+    pub(crate) fn hmac(&self, parts: &[&[u8]]) -> [u8; 32] {
+        hmac_sha256(&self.secret, parts)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

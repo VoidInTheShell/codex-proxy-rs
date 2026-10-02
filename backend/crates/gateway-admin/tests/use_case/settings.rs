@@ -10,8 +10,8 @@ use gateway_admin::{
         AdminErrorKind, MutationContext, Revision,
         pricing::{PricingChange, PricingSyncPreview, StoredPricing, SyncPricing, UpdatePricing},
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
-            RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
     },
     ports::store::{AdminStoreError, AdminStoreErrorKind, AdminStoreResult, SettingsStore},
@@ -306,6 +306,7 @@ async fn settings_should_reject_zero_refresh_margin_before_store_call() {
                 account_warmup_model: None,
                 egress_sharing_alert_enabled: true,
                 egress_sharing_alert_threshold: 2,
+                openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
             },
         )
         .await

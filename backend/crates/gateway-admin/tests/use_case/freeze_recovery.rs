@@ -9,7 +9,8 @@ use gateway_admin::freeze_recovery::{FreezeRecoveryDeps, FreezeRecoveryTask};
 use gateway_admin::model::MutationContext;
 use gateway_admin::model::accounts::{AccountFreeze, AccountRuntimeSnapshot};
 use gateway_admin::model::settings::{
-    AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RuntimeSettings,
+    AdminApiKey, AdminApiKeyMutation, ProviderInstallationIdStrategy, ReplaceRuntimeSettings,
+    RuntimeSettings,
 };
 use gateway_admin::ports::store::{
     AccountRuntimeStore, AccountStore, AdminStoreError, AdminStoreResult, SettingsStore,
@@ -58,6 +59,7 @@ fn runtime_settings(enabled: bool, probe_enabled: bool, adaptive: bool) -> Runti
         account_warmup_model: None,
         egress_sharing_alert_enabled: true,
         egress_sharing_alert_threshold: 2,
+        openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc::now(),
     }
 }

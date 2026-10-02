@@ -42,6 +42,7 @@ async fn service(
             name: account_id.to_owned(),
             secret: secret(&format!("token-{account_id}")),
             verified_account: profile(&format!("chatgpt-{account_id}")),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })

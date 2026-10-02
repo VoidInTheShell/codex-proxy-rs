@@ -274,6 +274,7 @@ async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinc
             name: account_id.to_owned(),
             secret: secret("at-initialized-thread-spawn"),
             verified_account: profile("chatgpt-initialized-thread-spawn"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -660,6 +661,7 @@ async fn openai_reauthorization_pending_payload_reuses_the_account_installation_
             name: "pending reauthorization".to_owned(),
             secret: secret("pending-reauth-access"),
             verified_account: profile("chatgpt-pending-reauth"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -747,6 +749,7 @@ async fn openai_admin_provider_projects_cached_quota_models_and_canonical_export
             name: "admin projection".to_owned(),
             secret: oauth_secret,
             verified_account: profile("chatgpt-admin-projection"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -854,6 +857,7 @@ async fn openai_admin_quota_refresh_updates_the_account_plan() {
             verified_account,
             next_refresh_at: None,
             enabled: true,
+            installation_id: uuid::Uuid::new_v4().to_string(),
         })
         .await;
     let account = store.account("acct_upgraded_plan").unwrap();
@@ -898,6 +902,7 @@ async fn openai_admin_quota_projects_credit_balance_from_refresh_and_cached_obse
             name: "credit balance".to_owned(),
             secret: secret("credit-balance-test-token"),
             verified_account: profile("chatgpt-credit-balance"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: None,
             enabled: true,
         })
@@ -981,6 +986,7 @@ async fn openai_admin_projects_free_plan_from_cached_quota_when_account_claims_o
             verified_account,
             next_refresh_at: None,
             enabled: true,
+            installation_id: uuid::Uuid::new_v4().to_string(),
         })
         .await;
     let account = store.account("acct_free_plan").expect("stored account");
@@ -1044,6 +1050,7 @@ async fn openai_admin_provider_projects_official_codex_quota_and_independent_buc
             name: "admin canonical quota".to_owned(),
             secret: secret("admin-canonical-quota-access"),
             verified_account: profile("chatgpt-admin-canonical-quota"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -1193,6 +1200,7 @@ async fn openai_admin_keeps_confirmed_exhaustion_separate_from_raw_usage_display
             name: "admin confirmed exhaustion".to_owned(),
             secret: secret("admin-confirmed-exhaustion-access"),
             verified_account: profile("chatgpt-admin-confirmed-exhaustion"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -1293,6 +1301,7 @@ async fn openai_admin_preserves_expired_window_usage_and_exhaustion_attribution(
                 name: "admin expired window".to_owned(),
                 secret: secret("admin-expired-window-access"),
                 verified_account: profile("chatgpt-admin-expired-window"),
+                installation_id: uuid::Uuid::new_v4().to_string(),
                 next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
                 enabled: true,
             })
@@ -1406,6 +1415,7 @@ async fn openai_admin_provider_rejects_unprepared_mutations_before_store_commit(
             name: "admin invalid".to_owned(),
             secret: secret("admin-invalid-access"),
             verified_account: profile("chatgpt-admin-invalid"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(chrono::Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -1490,6 +1500,7 @@ async fn openai_rotation_preserves_the_new_access_token_jwt_expiration() {
             name: "admin rotation expiration".to_owned(),
             secret: secret("admin-rotation-access"),
             verified_account: profile("chatgpt-admin-rotation-expiration"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: None,
             enabled: true,
         })
@@ -1551,6 +1562,7 @@ async fn reset_credit_admin(
             name: "reset credit".to_owned(),
             secret: secret("reset-credit-access"),
             verified_account: profile("chatgpt-reset-credit"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -2072,6 +2084,7 @@ mod errors {
                 name: "quota error".to_owned(),
                 secret: secret("quota-error-test-token"),
                 verified_account: profile("chatgpt-quota-error"),
+                installation_id: uuid::Uuid::new_v4().to_string(),
                 next_refresh_at: None,
                 enabled: true,
             })
@@ -2433,6 +2446,7 @@ mod errors {
                 name: "refresh error test".to_owned(),
                 secret: credential,
                 verified_account: profile("synthetic-refresh-user"),
+                installation_id: uuid::Uuid::new_v4().to_string(),
                 next_refresh_at: None,
                 enabled: true,
             })
@@ -2519,12 +2533,20 @@ async fn api_key_admin_exposes_only_configuration_and_preserves_key_when_rotatin
         .unwrap()
         .unwrap();
     let configuration = configuration.expose_to_provider().expose_to_provider();
-    assert_eq!(configuration.len(), 2);
+    assert_eq!(configuration.len(), 3);
     assert_eq!(
         configuration.get("base_url"),
         Some(&json!("https://first.example/v1"))
     );
     assert!(!configuration.contains_key("api_key"));
+    // installationId 是对账报告：不回显值，只报告策略、分组指纹与是否匹配当前分组。
+    let installation = configuration
+        .get("installationId")
+        .and_then(|value| value.as_object())
+        .expect("installationId report");
+    assert_eq!(installation.get("strategy"), Some(&json!("per-account")));
+    assert!(installation.contains_key("groupFingerprint"));
+    assert!(installation.contains_key("matchesCurrentGroupDerivation"));
     let prepared = admin
         .prepare_rotation(PrepareCredentialRotation {
             account: account_record(&account),
@@ -2578,6 +2600,7 @@ async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() 
             name: "OAuth transport".to_owned(),
             secret: secret("test-oauth-transport"),
             verified_account: profile("chatgpt-oauth-transport"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
         })
@@ -2597,10 +2620,18 @@ async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() 
         .await
         .unwrap()
         .unwrap();
+    let configuration = configuration.expose_to_provider().expose_to_provider();
+    // transport 之外的 installationId 字段是对账报告，结构固定且不回显 installation_id 值。
     assert_eq!(
-        configuration.expose_to_provider().expose_to_provider(),
-        json!({"transport":"prefer_websocket"}).as_object().unwrap()
+        configuration.get("transport"),
+        Some(&json!("prefer_websocket"))
     );
+    let installation = configuration
+        .get("installationId")
+        .and_then(|value| value.as_object())
+        .expect("installationId report");
+    assert_eq!(installation.get("strategy"), Some(&json!("per-account")));
+    assert_eq!(installation.len(), 3);
     for transport in ["http", "prefer_websocket"] {
         let prepared = admin
             .prepare_rotation(PrepareCredentialRotation {
@@ -2659,8 +2690,7 @@ async fn oauth_transport_settings_preserve_tokens_refresh_schedule_and_health() 
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(
-        configuration.expose_to_provider().expose_to_provider(),
-        json!({"transport":"http"}).as_object().unwrap()
-    );
+    let configuration = configuration.expose_to_provider().expose_to_provider();
+    assert_eq!(configuration.get("transport"), Some(&json!("http")));
+    assert!(configuration.contains_key("installationId"));
 }

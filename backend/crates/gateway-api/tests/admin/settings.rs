@@ -72,6 +72,7 @@ fn update_body() -> Value {
         "accountWarmupModel": null,
         "egressSharingAlertEnabled": true,
         "egressSharingAlertThreshold": 2
+        "openaiInstallationIdStrategy": "per-account"
     })
 }
 
@@ -213,6 +214,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
     use gateway_admin::model::settings::RuntimeSettings;
     use gateway_api::admin::settings::RuntimeSettingsView;
     use gateway_core::account::RotationStrategy;
+    use gateway_core::provider_ports::ProviderInstallationIdStrategy;
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let settings = RuntimeSettings {
@@ -258,6 +260,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
         account_warmup_model: None,
         egress_sharing_alert_enabled: true,
         egress_sharing_alert_threshold: 2,
+        openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc
             .with_ymd_and_hms(2026, 8, 2, 10, 30, 0)
             .single()
@@ -311,6 +314,7 @@ fn settings_response_should_cover_the_full_runtime_settings_contract() {
                 "accountWarmupModel": null,
                 "egressSharingAlertEnabled": true,
                 "egressSharingAlertThreshold": 2,
+                "openaiInstallationIdStrategy": "per-account",
                 "updatedAt": "2026-08-02T10:30:00Z",
                 "updatedAtDisplay": "2026-08-02 18:30:00"
         })
@@ -325,6 +329,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
     use gateway_admin::model::settings::RuntimeSettings;
     use gateway_api::admin::settings::RuntimeSettingsView;
     use gateway_core::account::RotationStrategy;
+    use gateway_core::provider_ports::ProviderInstallationIdStrategy;
     use gateway_core::routing::{PublicModelId, UpstreamModelId};
 
     let request: UpdateRuntimeSettingsRequest =
@@ -382,6 +387,7 @@ fn settings_request_and_response_fields_should_stay_in_lockstep() {
         account_warmup_model: None,
         egress_sharing_alert_enabled: true,
         egress_sharing_alert_threshold: 2,
+        openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: chrono::Utc::now(),
     };
 

@@ -2,6 +2,7 @@ mod admin;
 mod catalog;
 mod contract;
 mod cookie;
+mod installation;
 mod oauth;
 mod profile_statistics;
 mod quota;

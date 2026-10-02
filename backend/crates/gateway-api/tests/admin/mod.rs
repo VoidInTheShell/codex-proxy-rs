@@ -48,8 +48,8 @@ use gateway_admin::{
             ProviderModels, ProviderQuota,
         },
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
-            RotationStrategy, RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ModelMappings, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
     },
@@ -617,6 +617,7 @@ impl SettingsStore for MemorySettingsStore {
             account_warmup_model: None,
             egress_sharing_alert_enabled: true,
             egress_sharing_alert_threshold: 2,
+            openai_installation_id_strategy: command.openai_installation_id_strategy,
             updated_at: Utc::now(),
         };
         *settings = updated.clone();
@@ -1628,6 +1629,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         account_warmup_model: None,
         egress_sharing_alert_enabled: true,
         egress_sharing_alert_threshold: 2,
+        openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc::now(),
     }
 }
