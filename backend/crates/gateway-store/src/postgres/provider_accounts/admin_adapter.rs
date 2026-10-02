@@ -668,6 +668,9 @@ impl AccountStore for PgAdminAccountStore {
         if command.notes.is_some() {
             changed_fields.push("notes".to_owned());
         }
+        if command.request_profile.is_some() {
+            changed_fields.push("request_profile".to_owned());
+        }
         let config_revision = self
             .accounts
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
@@ -679,6 +682,7 @@ impl AccountStore for PgAdminAccountStore {
                 model_access: command.model_access,
                 group_ids: Some(command.group_ids),
                 outbound_proxy: command.outbound_proxy,
+                request_profile: command.request_profile,
                 audit: mutation_audit(
                     context,
                     MutationAuditOperation::ProviderAccountUpdate,
@@ -832,6 +836,8 @@ impl AccountStore for PgAdminAccountStore {
             .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
                 account_ids: command.account_ids,
                 notes: None,
+                // 批量更新不携带画像：批量统一画像与按账号差异化目的相悖。
+                request_profile: None,
                 enabled: command.enabled,
                 concurrency_limit: command.concurrency_limit,
                 weight: command.weight,
@@ -978,6 +984,9 @@ pub(super) fn prepare_import(
         if settings.notes.is_some() {
             changed_fields.push("notes".to_owned());
         }
+        if settings.request_profile.is_some() {
+            changed_fields.push("request_profile".to_owned());
+        }
     }
     Ok(ImportProviderAccounts {
         settings,
@@ -1063,6 +1072,9 @@ pub(super) fn prepare_rotation(
         }
         if settings.notes.is_some() {
             changed_fields.push("notes".to_owned());
+        }
+        if settings.request_profile.is_some() {
+            changed_fields.push("request_profile".to_owned());
         }
     }
     Ok(RotateProviderAccount {

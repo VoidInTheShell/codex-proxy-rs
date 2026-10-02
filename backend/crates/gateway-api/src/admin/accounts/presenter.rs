@@ -125,6 +125,10 @@ pub(super) fn account_view(
         },
         weight: account.weight.get(),
         model_access: account.model_access,
+        request_profile: account
+            .request_profile
+            .as_ref()
+            .and_then(|profile| serde_json::to_value(profile).ok()),
         outbound_proxy_endpoint: account
             .outbound_proxy
             .as_ref()

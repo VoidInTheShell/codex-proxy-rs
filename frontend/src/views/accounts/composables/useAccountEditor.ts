@@ -1,4 +1,5 @@
 import type { AccountModelAccess, ApiKeyConfiguration, getAccounts } from '@/api'
+import type { ProviderRequestProfile } from '@/api/modules/client-profiles'
 
 import { toast } from '@codex-proxy/ui'
 import { ref, shallowRef, watch } from 'vue'
@@ -25,6 +26,7 @@ export function useAccountEditor(options: {
   const modelAccess = ref<AccountModelAccess | undefined>()
   const proxyMode = shallowRef('preserve')
   const proxyId = shallowRef('')
+  const requestProfile = shallowRef<ProviderRequestProfile | null>(null)
   const selectedGroupIds = ref<string[]>([])
   const saveAction = useAsyncAction()
   const saving = saveAction.loading
@@ -76,6 +78,7 @@ export function useAccountEditor(options: {
     concurrencyLimit.value = concurrencyLimitInput(account.concurrencyLimit)
     weight.value = String(account.weight)
     modelAccess.value = { ...account.modelAccess, models: [...account.modelAccess.models] }
+    requestProfile.value = account.requestProfile ? { ...account.requestProfile } : null
     selectedGroupIds.value = account.groups.map(group => group.id)
     apiKey.value = emptyApiKeyAccountForm()
     oauthTransport.value = 'prefer_websocket'
@@ -127,6 +130,7 @@ export function useAccountEditor(options: {
         weight: scheduling.values.weight,
         modelAccess: modelAccess.value,
         groupIds: [...new Set(selectedGroupIds.value)],
+        requestProfile: requestProfile.value ? { ...requestProfile.value } : null,
       }
       const connectionChanged = isApiKey && (
         apiKey.value.apiKey !== ''
@@ -170,6 +174,7 @@ export function useAccountEditor(options: {
     concurrencyLimit,
     weight,
     modelAccess,
+    requestProfile,
     proxyMode,
     proxyId,
     selectedGroupIds,

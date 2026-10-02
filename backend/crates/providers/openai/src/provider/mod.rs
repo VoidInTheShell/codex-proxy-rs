@@ -224,8 +224,30 @@ impl CodexProvider {
     fn client_for_request(
         &self,
         context: &AttemptContext,
+        account: &gateway_core::account::ProviderAccount,
     ) -> Result<CodexBackendClient, ProviderError> {
-        let Some(profile) = context.request_profile() else {
+        // 账号覆盖优先于 Key/全局画像：账号是最终上游身份，跨账号请求不得被
+        // 网关级画像重新同设备化。诊断路径没有冻结 scope，沿用请求画像。
+        let (request_profile, profile_source) = match context
+            .account_scope()
+            .and_then(|scope| scope.account_request_profile(account.id()))
+        {
+            Some(configuration) => (
+                Some(self.resolve_request_profile(configuration)?),
+                "account_override",
+            ),
+            None => match context.request_profile().cloned() {
+                Some(profile) => (Some(profile), "request_profile"),
+                None => (None, "provider_default"),
+            },
+        };
+        tracing::info!(
+            request_id = context.request_id().as_str(),
+            account_id = account.id().as_str(),
+            profile_source,
+            "OpenAI request wire profile resolved"
+        );
+        let Some(profile) = request_profile else {
             return Ok(self.client.clone());
         };
         let profile = serde_json::from_value(Value::Object(profile.expose_to_provider().clone()))
@@ -921,7 +943,7 @@ impl CodexProvider {
         };
         let events = cold_response_stream(ColdResponse {
             client: self
-                .client_for_request(&context)?
+                .client_for_request(&context, lease.account())?
                 .for_account(lease.account())
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)

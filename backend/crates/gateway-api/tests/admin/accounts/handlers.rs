@@ -65,6 +65,7 @@ async fn account_cooldown_returns_an_instant_and_server_formatted_recovery() {
             };
             *fixture.account.lock().unwrap() = Some(AccountPageItem {
                 account: AccountRecord {
+                    request_profile: None,
                     id: "acct_cooldown".to_owned(),
                     provider_kind: gateway_core::routing::ProviderKind::new("openai").unwrap(),
                     groups: Vec::new(),
@@ -166,6 +167,7 @@ async fn connection_update_requires_admin_and_validates_before_calling_the_servi
         "concurrencyLimit":null,
         "weight":1,
         "groupIds":[],
+        "requestProfile":null,
         "connection":{"baseUrl":"https://api.example.invalid/v1", "transport":"http"}
     });
     for (authenticated, transport, oauth, expected) in [
@@ -281,4 +283,142 @@ async fn quota_forecast_requires_admin_and_valid_account_query() {
         assert!(value["data"].is_null());
         assert!(value["message"].is_string());
     }
+}
+
+#[tokio::test]
+async fn account_update_request_profile_is_required_nullable_and_size_limited() {
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let base = serde_json::json!({
+        "accountId":"acct_profile",
+        "enabled":true,
+        "concurrencyLimit":null,
+        "weight":1,
+        "groupIds":[]
+    });
+    let oversized = "x".repeat(65 * 1024);
+    for (label, profile, expected) in [
+        // 必填字段缺失走 serde 拒绝（422），与其他必填可空字段一致。
+        ("missing", None, StatusCode::UNPROCESSABLE_ENTITY),
+        (
+            "null clears",
+            Some(serde_json::json!(null)),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "object sets",
+            Some(serde_json::json!({
+                "client":"cli", "platform":"linux", "versionMode":"latest"
+            })),
+            StatusCode::SERVICE_UNAVAILABLE,
+        ),
+        (
+            "oversized rejected",
+            Some(serde_json::json!({ "client": oversized })),
+            StatusCode::BAD_REQUEST,
+        ),
+    ] {
+        let mut input = base.clone();
+        if let Some(profile) = profile {
+            input["requestProfile"] = profile;
+        }
+        let response = admin::router::<AdminTestState>()
+            .with_state(fixture.state())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/admin/accounts/update")
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header("x-request-id", "req_profile_update")
+                    .header(header::COOKIE, "cpr_session=valid-session")
+                    .body(Body::from(input.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), expected, "{label}");
+    }
+}
+
+#[tokio::test]
+async fn account_view_exposes_request_profile() {
+    use gateway_admin::model::{
+        Revision,
+        accounts::{AccountCapacity, AccountPageItem, AccountRecord},
+    };
+    use gateway_core::account::{
+        AccountStatusFacts, CredentialState, QuotaState, resolve_account_status,
+    };
+    let fixture = AdminTestFixture::new().await;
+    fixture.auth.insert_session("valid-session");
+    let now = chrono::Utc::now();
+    let facts = AccountStatusFacts {
+        enabled: true,
+        credential_state: CredentialState::Ready,
+        access_token_expires_at: None,
+        quota: QuotaState::unknown(),
+        cooldown: None,
+        last_error_reason: None,
+        last_error_message: None,
+    };
+    *fixture.account.lock().unwrap() = Some(AccountPageItem {
+        account: AccountRecord {
+            request_profile: Some(gateway_core::account::OpaqueProviderData::new(
+                serde_json::Map::from_iter([(
+                    "terminal".to_owned(),
+                    serde_json::Value::String("acct-term".to_owned()),
+                )]),
+            )),
+            id: "acct_profile_view".to_owned(),
+            provider_kind: gateway_core::routing::ProviderKind::new("openai").unwrap(),
+            groups: Vec::new(),
+            name: "profile view account".to_owned(),
+            notes: None,
+            email: None,
+            upstream_user_id: None,
+            upstream_account_id: None,
+            plan_type: None,
+            authentication_kind: "oauth".to_owned(),
+            credential_revision: Revision::new(1).unwrap(),
+            has_refresh_token: true,
+            access_token_expires_at: None,
+            next_refresh_at: None,
+            enabled: true,
+            concurrency_limit: None,
+            weight: Default::default(),
+            model_access: Default::default(),
+            outbound_proxy: None,
+            credential_state: facts.credential_state,
+            credential_observed_at: now,
+            quota: facts.quota,
+            last_error_reason: None,
+            last_error_message: None,
+            created_at: now,
+            updated_at: now,
+        },
+        capacity: AccountCapacity {
+            used_slots: None,
+            total_slots: None,
+        },
+        projection: resolve_account_status(&facts, now.into()),
+    });
+    let response = admin::accounts::router::<AdminTestState>()
+        .with_state(fixture.state())
+        .oneshot(
+            Request::builder()
+                .uri("/api/admin/accounts")
+                .header("x-request-id", "req_profile_view")
+                .header(header::COOKIE, "cpr_session=valid-session")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), 32768).await.unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        value["data"]["items"][0]["requestProfile"]["terminal"],
+        serde_json::json!("acct-term")
+    );
 }

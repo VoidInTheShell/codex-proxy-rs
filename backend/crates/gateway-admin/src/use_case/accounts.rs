@@ -652,6 +652,10 @@ impl AccountsService for DefaultAccountsService {
         let account_id = ProviderAccountId::new(command.account_id.clone())
             .map_err(|_| AdminError::invalid("Provider 账号 ID 不合法"))?;
         let (_, provider) = self.provider_for_account(&account_id).await?;
+        // 账号画像先经 Provider 解析链校验，非法文档不落库；清除不需要校验。
+        if let Some(profile) = command.request_profile.as_ref().and_then(|p| p.as_ref()) {
+            super::validate_account_request_profile(provider.as_ref(), profile)?;
+        }
         let enabled = command.enabled;
         let result = self
             .accounts

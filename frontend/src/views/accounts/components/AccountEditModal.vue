@@ -2,6 +2,7 @@
 import type { AccountRow } from '../constants'
 import type { ApiKeyAccountForm } from '../utils/upstreamApiKey'
 import type { AccountGroup, AccountModelAccess } from '@/api'
+import type { ProviderRequestProfile } from '@/api/modules/client-profiles'
 
 import { BaseButton, BaseFormItem, BaseModal, BaseSegmented, BaseTextarea } from '@codex-proxy/ui'
 import ProviderIconGroup from '@/components/ProviderIconGroup.vue'
@@ -9,6 +10,7 @@ import { isOpenAiApiKeyAccount, isOpenAiOAuthAccount } from '../utils/upstreamAp
 import AccountApiKeyFields from './AccountApiKeyFields.vue'
 import AccountIdentityCell from './AccountIdentityCell.vue'
 import AccountPlanBadge from './AccountPlanBadge.vue'
+import AccountRequestProfileField from './AccountRequestProfileField.vue'
 import AccountSettingsFields from './AccountSettingsFields.vue'
 
 defineProps<{
@@ -38,6 +40,7 @@ const modelAccess = defineModel<AccountModelAccess | undefined>('modelAccess', {
 const weight = defineModel<string>('weight', { required: true })
 const proxyMode = defineModel<string>('proxyMode', { required: true })
 const proxyId = defineModel<string>('proxyId', { required: true })
+const requestProfile = defineModel<ProviderRequestProfile | null>('requestProfile', { required: true })
 const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: true })
 </script>
 
@@ -104,6 +107,21 @@ const selectedGroupIds = defineModel<string[]>('selectedGroupIds', { required: t
         :endpoint="account.outboundProxyEndpoint"
         :account-id="account.id"
       />
+
+      <fieldset class="m-0 min-w-0 border-0 p-0">
+        <legend class="mb-3 p-0 text-cp font-medium text-cp-text-secondary">
+          上游身份
+        </legend>
+        <p class="m-0 text-cp-sm text-cp-text-secondary">
+          独立配置时该账号对上游呈现此设备画像；跟随调用方时按 Client Key 覆盖与全局默认解析。
+        </p>
+        <AccountRequestProfileField
+          v-model="requestProfile"
+          :provider="account.provider"
+          :active="open"
+          :disabled="saving"
+        />
+      </fieldset>
 
       <BaseFormItem label="备注">
         <BaseTextarea

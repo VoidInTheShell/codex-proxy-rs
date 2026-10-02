@@ -65,6 +65,7 @@ pub struct SnapshotProviderAccountData {
     pub id: String,
     pub provider_kind: String,
     pub model_access: gateway_core::account::AccountModelAccess,
+    pub request_profile: Option<gateway_core::account::OpaqueProviderData>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -208,6 +209,7 @@ impl SnapshotStorePort for PgRuntimeSnapshotRepository {
                         .map(|id| {
                             SnapshotProviderAccountFacts::new(id, account.provider_kind)
                                 .with_model_access(account.model_access)
+                                .with_request_profile(account.request_profile)
                         })
                         .map_err(|_| SnapshotStoreError::unavailable())
                 })
@@ -389,20 +391,28 @@ async fn load_provider_accounts(
             String,
             String,
             sqlx::types::Json<gateway_core::account::AccountModelAccess>,
+            Option<serde_json::Value>,
         ),
-    >("select id, provider_kind, model_access_json from provider_accounts order by id")
+    >(
+        "select id, provider_kind, model_access_json, request_profile_json          from provider_accounts order by id",
+    )
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("load snapshot provider accounts"))
-    .map(|rows| {
+    .and_then(|rows| {
         rows.into_iter()
-            .map(
-                |(id, provider_kind, model_access)| SnapshotProviderAccountData {
+            .map(|(id, provider_kind, model_access, request_profile)| {
+                Ok(SnapshotProviderAccountData {
                     id,
                     provider_kind,
                     model_access: model_access.0,
-                },
-            )
+                    // 列约束保证 object 或 NULL；防御非对象值，避免把坏配置静默当无覆盖。
+                    request_profile: request_profile
+                        .map(serde_json::from_value::<gateway_core::account::OpaqueProviderData>)
+                        .transpose()
+                        .map_err(|_| invalid("invalid account request profile JSON"))?,
+                })
+            })
             .collect()
     })
 }

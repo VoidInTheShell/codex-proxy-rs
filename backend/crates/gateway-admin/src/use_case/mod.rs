@@ -93,6 +93,17 @@ fn map_provider_error(
     AdminError::new(kind, error.public_message().unwrap_or(message))
 }
 
+/// 校验账号级请求画像选择；与 client key 覆盖共用 Provider 解析链，不引入新格式。
+pub(crate) fn validate_account_request_profile(
+    provider: &dyn crate::ports::provider::ProviderAdmin,
+    profile: &gateway_core::account::OpaqueProviderData,
+) -> Result<(), AdminError> {
+    provider
+        .preview_client_profile(profile)
+        .map_err(|error| map_provider_error(error, "client profile"))?;
+    Ok(())
+}
+
 async fn publish_committed(
     snapshot: &dyn SnapshotControl,
     revision: crate::model::Revision,
