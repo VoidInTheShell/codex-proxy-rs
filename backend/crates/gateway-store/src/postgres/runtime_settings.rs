@@ -292,7 +292,7 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                     account_auto_freeze_adaptive_concurrency,
                     account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
-                    egress_sharing_alert_enabled, egress_sharing_alert_threshold
+                    egress_sharing_alert_enabled, egress_sharing_alert_threshold,
                     openai_installation_id_strategy
              from runtime_settings where id = 1",
         )
@@ -482,7 +482,7 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                 account_auto_freeze_adaptive_concurrency,
                 account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
-                egress_sharing_alert_enabled, egress_sharing_alert_threshold
+                egress_sharing_alert_enabled, egress_sharing_alert_threshold,
                 openai_installation_id_strategy
          from runtime_settings where id = 1",
     )
@@ -556,7 +556,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      openai_guardian_reserved_concurrency = $31,
                      egress_sharing_alert_enabled = $32,
                      egress_sharing_alert_threshold = $33,
-                     openai_installation_id_strategy = $32,
+                     openai_installation_id_strategy = $34,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
