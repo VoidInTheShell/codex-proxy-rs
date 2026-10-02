@@ -4,6 +4,7 @@ import type { ClientProfileSelection, ProviderRequestProfiles, ProviderRequestPr
 import request from '../request'
 
 export type RotationStrategy = 'smart' | 'quota_reset_priority' | 'round_robin' | 'sticky'
+export type InstallationIdStrategy = 'per-account' | 'egress-grouped'
 
 export interface SmartSchedulingConfig {
   loadWeight: number
@@ -36,6 +37,7 @@ export interface RuntimeSettings {
   concurrencyWaitTimeoutSeconds: number
   responsesMaxDecompressedBodyBytes: number
   rotationStrategy: RotationStrategy
+  openaiInstallationIdStrategy: InstallationIdStrategy
   minCodexDesktopVersion: string | null
   minCodexCliVersion: string | null
   usageRetentionDays: number

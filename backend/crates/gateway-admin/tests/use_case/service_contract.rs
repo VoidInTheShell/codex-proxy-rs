@@ -58,6 +58,7 @@ impl VisitMut for WireTypes {
             *ty = match last.ident.to_string().as_str() {
                 "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" => parse_quote!(String),
                 "OpaqueProviderData" => parse_quote!(serde_json::Map<String, serde_json::Value>),
+                "ProviderInstallationIdStrategy" => parse_quote!(String),
                 _ => Type::Path(syn::TypePath {
                     qself: None,
                     path: last.into(),
@@ -268,6 +269,7 @@ fn sdk_settings_contract_matches_host_declarations() {
         pub type ModelMappings = BTreeMap<String, String>;
         pub type Revision = NonZeroU64;
         pub type RotationStrategy = String;
+        pub type ProviderInstallationIdStrategy = String;
         pub type PricingOverrides = BTreeMap<String, BTreeMap<String, ModelPriceOverride>>;
         #(#types)*
         #(#operations)*

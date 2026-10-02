@@ -22,6 +22,9 @@ pub type ProviderRequestProfileUpdates =
 /// 账号调度策略；由 Core 拥有稳定值与 wire 映射。
 pub use gateway_core::account::RotationStrategy;
 
+/// OpenAI installation_id 派生策略；由 Core 拥有稳定值与 wire 映射。
+pub use gateway_core::provider_ports::ProviderInstallationIdStrategy;
+
 /// 完整运行设置事实。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -57,6 +60,7 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: ProviderInstallationIdStrategy,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -97,6 +101,7 @@ pub struct ReplaceRuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: ProviderInstallationIdStrategy,
 }
 
 /// 明文管理员 API Key；按产品约束明文落库，但禁止 Debug 泄漏。
@@ -204,6 +209,7 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
+            openai_installation_id_strategy: settings.openai_installation_id_strategy,
         }
     }
 }

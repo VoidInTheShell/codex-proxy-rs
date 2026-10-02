@@ -14,6 +14,7 @@ use gateway_core::account::{
     NewProviderAccount, ProviderAccount, ProviderAccountId, ProviderAccountIdentity,
     ProviderAccountUpdate, QuotaState,
 };
+use gateway_core::provider_ports::ProviderInstallationIdStrategy;
 use gateway_core::provider_ports::{
     ProviderLeaseAcquisition, ProviderLeaseGuard, ProviderLeasePort, ProviderLeaseRequest,
     ProviderRefreshCapacityRequest, ProviderRefreshLeaseRequest, ProviderRuntimePolicyPort,
@@ -25,6 +26,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use super::api_key::{ApiKeyCredentialData, CODEX_AUTHENTICATION_KIND_API_KEY};
+use super::installation::CodexInstallationIdDeriver;
 use super::recovery_log::{CodexOAuthRecoveryOperation, record_oauth_recovery};
 use super::security::CodexCredentialCodec;
 use super::token_client::{
@@ -45,6 +47,8 @@ pub struct ImportCodexOAuthCredential {
     pub name: String,
     pub secret: CodexOAuthSecret,
     pub verified_account: CodexAccountProfile,
+    /// 调用方决定的 installation_id；派生策略见 `CodexInstallationIdDeriver`。
+    pub installation_id: String,
     pub next_refresh_at: Option<DateTime<Utc>>,
     pub enabled: bool,
 }
@@ -88,6 +92,7 @@ impl std::fmt::Debug for ImportCodexOAuthCredential {
             .field("name", &self.name)
             .field("secret", &"<redacted>")
             .field("verified_account", &self.verified_account)
+            .field("installation_id", &"<pseudonymous>")
             .field("next_refresh_at", &self.next_refresh_at)
             .field("enabled", &self.enabled)
             .finish()
@@ -382,6 +387,8 @@ pub enum CodexCredentialAdminError {
     },
     #[error("Codex refresh send state is ambiguous")]
     RefreshAmbiguous { message: Option<String> },
+    #[error("Codex installation id derivation is unavailable")]
+    InstallationPolicyUnavailable,
 }
 
 impl CodexCredentialAdminError {
@@ -398,7 +405,8 @@ impl CodexCredentialAdminError {
             | Self::NotFound
             | Self::MissingRefreshToken
             | Self::RefreshLeaseUnavailable
-            | Self::RefreshUnavailable => None,
+            | Self::RefreshUnavailable
+            | Self::InstallationPolicyUnavailable => None,
         }
     }
 }
@@ -555,9 +563,13 @@ impl CodexCredentialAdmin {
         let revision =
             CredentialRevision::new(1).map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let upstream_user_id = input.verified_account.chatgpt_user_id.clone();
-        let credential =
-            CodexCredentialCodec::encode_new(&input.secret, &input.verified_account, Vec::new())
-                .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
+        let credential = CodexCredentialCodec::encode_new(
+            &input.secret,
+            &input.verified_account,
+            input.installation_id,
+            Vec::new(),
+        )
+        .map_err(|_| CodexCredentialAdminError::InvalidCredential)?;
         let account = ProviderAccount::new(
             account_id,
             provider,
@@ -863,6 +875,9 @@ pub struct CodexCredentialAdminService {
     personal_access_token_client: Option<Arc<OpenAiTokenClient>>,
     leases: Arc<dyn ProviderLeasePort>,
     runtime_policy: Arc<dyn ProviderRuntimePolicyPort>,
+    // 生产组装必配：egress-grouped 策略下缺失派生器时导入直接报错，
+    // 不静默回退随机 installation_id（见 derive_import_installation_id）。
+    installation: Option<CodexInstallationIdDeriver>,
 }
 
 impl fmt::Debug for CodexCredentialAdminService {
@@ -876,6 +891,13 @@ impl fmt::Debug for CodexCredentialAdminService {
             )
             .field("leases", &"ProviderLeasePort")
             .field("runtime_policy", &"ProviderRuntimePolicyPort")
+            .field(
+                "installation",
+                &self
+                    .installation
+                    .is_some()
+                    .then_some("CodexInstallationIdDeriver"),
+            )
             .finish()
     }
 }
@@ -891,7 +913,55 @@ impl CodexCredentialAdminService {
             personal_access_token_client: None,
             leases,
             runtime_policy,
+            installation: None,
         }
+    }
+
+    /// 在生产组装时注入 installation_id 派生器（共享部署级密钥）。
+    #[must_use]
+    pub fn with_installation_derivation(
+        mut self,
+        installation: CodexInstallationIdDeriver,
+    ) -> Self {
+        self.installation = Some(installation);
+        self
+    }
+
+    /// 读取当前 installation_id 派生策略；读取失败时导入失败（管理员已显式
+    /// 选择 egress-grouped 时静默回退随机会产生预期外的独立设备信号）。
+    async fn load_import_strategy(
+        &self,
+    ) -> Result<ProviderInstallationIdStrategy, CodexCredentialAdminError> {
+        self.runtime_policy
+            .load_installation_id_strategy()
+            .await
+            .map_err(|_| CodexCredentialAdminError::InstallationPolicyUnavailable)
+    }
+
+    /// 按已读取的策略为导入账号派生 installation_id；代理为账号创建时的
+    /// 出口分组。per-account 不依赖部署密钥，未装配派生器时保持历史随机
+    /// 行为（兼容既有装配）；egress-grouped 缺派生器直接报错。
+    fn derive_import_installation_id(
+        &self,
+        strategy: ProviderInstallationIdStrategy,
+        account_id: &str,
+        proxy: Option<&gateway_core::account::OutboundProxy>,
+    ) -> Result<String, CodexCredentialAdminError> {
+        let derived = match self.installation.as_ref() {
+            Some(installation) => installation.derive_observed(strategy, proxy),
+            None if strategy == ProviderInstallationIdStrategy::PerAccount => {
+                return Ok(uuid::Uuid::new_v4().to_string());
+            }
+            None => return Err(CodexCredentialAdminError::InstallationPolicyUnavailable),
+        };
+        tracing::info!(
+            target: "openai_installation_id",
+            account_id = %account_id,
+            strategy = derived.strategy.as_str(),
+            egress_group = %derived.fingerprint,
+            "OpenAI installation_id derived for imported credential"
+        );
+        Ok(derived.value)
     }
 
     /// 在生产组装时复用 OAuth auth client，为 at- 导入启用上游身份验证。
@@ -1031,11 +1101,24 @@ impl CodexCredentialAdminService {
         if candidates.is_empty() || candidates.len() > MAX_BATCH {
             return Err(CodexCredentialAdminError::InvalidInput);
         }
+        // 同一导入批次内策略保持一致：文档开始时读取一次，避免导入中途切换
+        // 设置导致同批账号混合派生。
+        let installation_strategy = self.load_import_strategy().await?;
         let mut accounts = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let account_id = format!("acct_{}", uuid::Uuid::now_v7().simple());
+            // 代理分组在此已解析（文档指定或默认代理）；installation_id 统一
+            // 在代理确定后按当前策略派生，与换绑不重算的语义一致。
+            let installation_id = self.derive_import_installation_id(
+                installation_strategy,
+                &account_id,
+                candidate.outbound_proxy.as_ref(),
+            )?;
             let authentication = match candidate.authentication {
-                ParsedCodexAuthentication::ApiKey(data) => {
+                ParsedCodexAuthentication::ApiKey(mut data) => {
+                    // parse 阶段无代理上下文，先用占位 v4 通过结构校验，
+                    // 此处统一覆写为派生值（含 per-account 随机）。
+                    data.installation_id = installation_id;
                     let mut prepared = CodexCredentialAdmin.prepare_api_key(
                         account_id,
                         candidate
@@ -1115,7 +1198,7 @@ impl CodexCredentialAdminService {
                         .or_else(|| metadata.email.clone())
                         .filter(|name| !name.trim().is_empty())
                         .unwrap_or_else(|| "Codex OAuth".to_owned()),
-                    installation_id: uuid::Uuid::new_v4().to_string(),
+                    installation_id,
                     secret,
                     metadata,
                     access_token_expires_at,
@@ -1534,6 +1617,8 @@ fn parse_api_key_import(value: &Value) -> Result<ApiKeyCredentialData, CodexCred
     }
     let data = ApiKeyCredentialData {
         schema_version: 1,
+        // 占位值：解析阶段尚无代理分组上下文，调用方在 prepare 循环里按
+        // 当前策略统一覆写（见 prepare_import_document_with_proxy）。
         installation_id: uuid::Uuid::new_v4().to_string(),
         base_url,
         api_key: first_string(credentials, &["api_key"])

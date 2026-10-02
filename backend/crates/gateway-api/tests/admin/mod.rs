@@ -48,8 +48,8 @@ use gateway_admin::{
             ProviderModels, ProviderQuota,
         },
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ModelMappings, ReplaceRuntimeSettings,
-            RotationStrategy, RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ModelMappings, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
         system::{SystemOperationAccepted, SystemUpdateDetail, SystemUpdateStatus, SystemVersion},
     },
@@ -589,6 +589,7 @@ impl SettingsStore for MemorySettingsStore {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            openai_installation_id_strategy: command.openai_installation_id_strategy,
             updated_at: Utc::now(),
         };
         *settings = updated.clone();
@@ -1598,6 +1599,7 @@ fn test_runtime_settings() -> RuntimeSettings {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
+        openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc::now(),
     }
 }

@@ -852,8 +852,11 @@ sub2api 的 `credentials.model_mapping` 不转换为本项目的账号模型限�
 OpenAI OAuth 账号只接受 `connection: { transport }`，不接受 `baseUrl`、`apiKey` 或 OAuth token。
 连接设置不能修改账号 ID、Provider 或认证类型，也不接受通用凭据文档。
 凭据与设置在同一事务中保存，任一校验或持久化失败均不落库。
-`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport }`；
-OAuth 账号返回 `credentialConfiguration: { transport }`。响应不回显密钥或 token；不适用的账号省略该字段。
+`GET /api/admin/accounts/detail` 对 API Key 账号额外返回 `credentialConfiguration: { base_url, transport, installationId }`；
+OAuth 账号返回 `credentialConfiguration: { transport, installationId }`。响应不回显密钥或 token；不适用的账号省略该字段。
+`installationId` 是对账报告对象 `{ strategy, groupFingerprint, matchesCurrentGroupDerivation }`：不回显
+installation_id 值与组键明文，`groupFingerprint` 是出口组键的短指纹，`matchesCurrentGroupDerivation`
+表示存量凭据值是否等于当前分组策略的确定性派生值，可用于判断重新导入是否会改变该值。
 更新会推进凭据 revision 并失效目录与连接；旧版本会话不可静默续接到新上游
 
 OAuth start 使用：
@@ -1225,6 +1228,7 @@ concurrencyWaitTimeoutSeconds
 responsesMaxDecompressedBodyBytes
 requestIntervalMs
 rotationStrategy
+openaiInstallationIdStrategy
 smartScheduling
 minCodexDesktopVersion
 minCodexCliVersion
@@ -1282,6 +1286,14 @@ Guardian 以 `subagent_kind` 或 `client_metadata.x-openai-subagent` 值 `guardi
 
 `rotationStrategy` 可取 `smart`、`quota_reset_priority`、`round_robin`、`sticky`。
 两个 `minCodex*Version` 字段为 `string | null`，只设置最低版本，不存在最大版本字段
+
+`openaiInstallationIdStrategy` 控制 OpenAI 账号 `installation_id` 的派生方式，可取 `per-account`（默认）
+与 `egress-grouped`。`per-account` 下每个账号生成独立的随机 UUIDv4，与官方 Codex CLI 单设备多账号
+行为一致。`egress-grouped` 下同一出口（直连或同代理 URL）的账号共享由
+`identity_hmac_secret` 派生的确定性 UUIDv4，多账号对外表现为同一台设备，OAuth 授权 URL 的
+`source_surface_stable_id` 随 installation_id 自动跟随。策略仅影响新增和重新导入的账号；
+已有账号保持原值，切换策略不会改写存量凭据，需要重新导入才会按新策略派生。导入的 OAuth
+文档中携带的 `installation_id` 一律被忽略，账号换绑代理不重算派生值（与官方"设备更换网络"语义一致）
 
 `smartScheduling` 是必填的完整对象，仅在内置 `smart` 策略下生效，切换其他策略时仍保存其值：
 

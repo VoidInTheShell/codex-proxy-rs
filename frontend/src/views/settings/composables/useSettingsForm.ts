@@ -1,5 +1,5 @@
 import type { rotationOptions } from '../constants'
-import type { RequestLocation, SmartSchedulingConfig } from '@/api'
+import type { InstallationIdStrategy, RequestLocation, SmartSchedulingConfig } from '@/api'
 import type { ProviderRequestProfiles, ProviderRequestProfileUpdates } from '@/api/modules/client-profiles'
 import { toast } from '@codex-proxy/ui'
 import { isEqual } from 'es-toolkit'
@@ -40,6 +40,7 @@ export function useSettingsForm() {
     responsesMaxDecompressedBodyMiB: null as number | null,
 
     rotationStrategy: '' as RotationStrategy | '',
+    openaiInstallationIdStrategy: '' as InstallationIdStrategy | '',
     minCodexDesktopVersion: '',
     minCodexCliVersion: '',
     usageRetentionDays: 31,
@@ -138,6 +139,7 @@ export function useSettingsForm() {
     form.smartScheduling = { ...data.smartScheduling }
     smartSchedulingDefaults.value = { ...data.smartSchedulingDefaults }
     form.rotationStrategy = data.rotationStrategy
+    form.openaiInstallationIdStrategy = data.openaiInstallationIdStrategy
     form.minCodexDesktopVersion = data.minCodexDesktopVersion ?? ''
     form.providerRequestProfiles = cloneProfiles(data.providerRequestProfiles)
     form.minCodexCliVersion = data.minCodexCliVersion ?? ''
@@ -214,9 +216,13 @@ export function useSettingsForm() {
     const savedSettings = saved.value
     if (saving.value || loading.value || !savedRequestLocation.value || !savedSettings)
       return
-    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, requestIntervalMs, rotationStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
+    const { refreshMarginSeconds, refreshConcurrency, maxConcurrentPerAccount, openaiGuardianReservedConcurrency, requestIntervalMs, rotationStrategy, openaiInstallationIdStrategy, maxWaitingPerKey, maxWaitingPerAccount, concurrencyWaitTimeoutSeconds, responsesMaxDecompressedBodyMiB, accountAutoFreezeThreshold, accountAutoFreezeWindowSeconds, accountAutoFreezeDurationSeconds } = form
     if (refreshMarginSeconds === null || refreshConcurrency === null || maxConcurrentPerAccount === null || openaiGuardianReservedConcurrency === null || requestIntervalMs === null || !rotationStrategy || maxWaitingPerKey === null || maxWaitingPerAccount === null || concurrencyWaitTimeoutSeconds === null) {
       toast.warning('请完整填写并发、队列、凭据刷新参数和调度策略')
+      return
+    }
+    if (!openaiInstallationIdStrategy) {
+      toast.warning('请选择 installation_id 派生策略')
       return
     }
     if (!Number.isInteger(maxConcurrentPerAccount) || maxConcurrentPerAccount < 0 || maxConcurrentPerAccount > 4294967295) {
@@ -300,6 +306,7 @@ export function useSettingsForm() {
         concurrencyWaitTimeoutSeconds,
         responsesMaxDecompressedBodyBytes: responsesMaxDecompressedBodyMiB * MIB,
         rotationStrategy,
+        openaiInstallationIdStrategy,
         smartScheduling: { ...smartScheduling },
         minCodexDesktopVersion: form.minCodexDesktopVersion.trim() || null,
         minCodexCliVersion: form.minCodexCliVersion.trim() || null,

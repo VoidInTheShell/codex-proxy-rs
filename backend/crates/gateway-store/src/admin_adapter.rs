@@ -115,6 +115,10 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_warmup_enabled: command.account_warmup_enabled,
                 account_warmup_schedule_time: command.account_warmup_schedule_time,
                 account_warmup_model: command.account_warmup_model,
+                openai_installation_id_strategy: command
+                    .openai_installation_id_strategy
+                    .as_str()
+                    .to_owned(),
             },
             audit: mutation_audit(
                 context,
@@ -135,6 +139,7 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "openai_guardian_reserved_concurrency".to_owned(),
                     "responses_max_decompressed_body_bytes".to_owned(),
                     "rotation_strategy".to_owned(),
+                    "openai_installation_id_strategy".to_owned(),
                     "smart_scheduling_json".to_owned(),
                     "min_codex_desktop_version".to_owned(),
                     "min_codex_cli_version".to_owned(),
@@ -206,6 +211,17 @@ pub(crate) fn admin_runtime_settings(
                 "rotation strategy is invalid",
             )
         })?;
+    let openai_installation_id_strategy =
+        gateway_core::provider_ports::ProviderInstallationIdStrategy::parse(
+            settings.openai_installation_id_strategy.as_str(),
+        )
+        .ok_or_else(|| {
+            AdminStoreError::new(
+                AdminStoreErrorKind::Invalid,
+                "runtime settings",
+                "installation id strategy is invalid",
+            )
+        })?;
     let model_mappings = settings
         .model_mappings
         .into_iter()
@@ -244,6 +260,7 @@ pub(crate) fn admin_runtime_settings(
         responses_max_decompressed_body_bytes: settings.responses_max_decompressed_body_bytes,
         smart_scheduling: settings.smart_scheduling,
         rotation_strategy,
+        openai_installation_id_strategy,
         min_codex_desktop_version: settings.min_codex_desktop_version,
         min_codex_cli_version: settings.min_codex_cli_version,
         usage_retention_days: settings.usage_retention_days,

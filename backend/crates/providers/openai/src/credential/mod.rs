@@ -5,6 +5,7 @@ mod affinity;
 mod api_key;
 mod catalog;
 mod cookie;
+pub(crate) mod installation;
 mod oauth;
 mod profile_statistics;
 mod quota;
@@ -21,6 +22,7 @@ pub(crate) use affinity::{
     derive_codex_endpoint_session_affinity, derive_codex_session_affinity,
     derive_previous_response_id_hash,
 };
+pub use installation::CodexInstallationIdDeriver;
 pub(crate) use oauth::oauth_owner_ref;
 pub(crate) use types::parse_access_token_expiration;
 

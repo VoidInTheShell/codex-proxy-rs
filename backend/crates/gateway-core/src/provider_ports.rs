@@ -1030,6 +1030,47 @@ pub trait ProviderRuntimePolicyPort: Send + Sync {
     ) -> BoxFuture<'_, Result<ProviderWarmupPolicy, ProviderStoreError>> {
         Box::pin(async move { Ok(ProviderWarmupPolicy::disabled()) })
     }
+
+    /// 读取 OpenAI installation_id 派生策略；默认保持每账号独立随机的现状，
+    /// 只有实现运行时设置的存储需要覆盖。仅在凭据创建时点消费。
+    fn load_installation_id_strategy(
+        &self,
+    ) -> BoxFuture<'_, Result<ProviderInstallationIdStrategy, ProviderStoreError>> {
+        Box::pin(async move { Ok(ProviderInstallationIdStrategy::PerAccount) })
+    }
+}
+
+/// OpenAI `installation_id` 派生策略；来源于 `runtime_settings`。
+///
+/// `PerAccount` 是历史行为：每账号独立随机 UUIDv4。`EgressGrouped` 在凭据
+/// 创建时按账号当时的出口分组确定性派生，同一出口分组的账号共享同一
+/// installation_id（对齐官方「一台设备多账号」分布）。策略切换只影响之后的
+/// 新凭据，不重写存量凭据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ProviderInstallationIdStrategy {
+    PerAccount,
+    EgressGrouped,
+}
+
+impl ProviderInstallationIdStrategy {
+    /// 稳定值；与迁移 `0023_openai_installation_id_strategy.sql` 的 check 约束一致。
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::PerAccount => "per-account",
+            Self::EgressGrouped => "egress-grouped",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "per-account" => Some(Self::PerAccount),
+            "egress-grouped" => Some(Self::EgressGrouped),
+            _ => None,
+        }
+    }
 }
 
 /// 账号容量熔断（自动冻结）策略；来源于 `runtime_settings`，

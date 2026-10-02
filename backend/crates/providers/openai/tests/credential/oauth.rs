@@ -160,6 +160,7 @@ async fn complete(
         Arc::new(MemoryAccountStore::default()),
         CodexCredentialAdmin,
         profile(),
+        crate::support::runtime_policy(),
     );
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
@@ -209,6 +210,7 @@ async fn authorize_url_matches_the_official_desktop_parameter_contract() {
         Arc::new(MemoryAccountStore::default()),
         CodexCredentialAdmin,
         profile(),
+        crate::support::runtime_policy(),
     );
     let started = service
         .start_authorization(StartCodexOAuthAuthorization {
@@ -376,6 +378,7 @@ async fn separate_new_authorizations_use_distinct_surface_stable_ids() {
             Arc::new(MemoryAccountStore::default()),
             CodexCredentialAdmin,
             profile(),
+            crate::support::runtime_policy(),
         );
         let started = service
             .start_authorization(StartCodexOAuthAuthorization {
@@ -409,6 +412,7 @@ async fn repeated_reauthorization_derives_the_same_surface_id_for_one_account() 
             name: "surface reauthorization".to_owned(),
             secret: secret("surface-reauth-access"),
             verified_account: account_profile("chatgpt-surface-reauth"),
+            installation_id: uuid::Uuid::new_v4().to_string(),
             next_refresh_at: None,
             enabled: true,
         })
@@ -424,6 +428,7 @@ async fn repeated_reauthorization_derives_the_same_surface_id_for_one_account() 
             store.clone(),
             CodexCredentialAdmin,
             profile(),
+            crate::support::runtime_policy(),
         );
         let started = service
             .start_authorization(StartCodexOAuthAuthorization {
@@ -525,4 +530,63 @@ async fn first_exchange_permits_missing_identity_claims_but_requires_a_parseable
         .await
         .expect_err("official local payload parsing rejects malformed id tokens");
     assert_eq!(error, CodexOAuthAdminError::TokenRejected);
+}
+
+#[tokio::test]
+async fn egress_grouped_create_shares_surface_id_within_the_same_proxy_group() {
+    use provider_openai::credential::CodexInstallationIdDeriver;
+
+    let deriver_path = std::env::temp_dir().join(format!(
+        "codex-installation-oauth-test-{}",
+        std::process::id()
+    ));
+    let deriver =
+        CodexInstallationIdDeriver::load_or_create(&deriver_path).expect("deriver secret");
+    let proxy =
+        gateway_core::account::OutboundProxy::parse("http://127.0.0.1:18080").expect("proxy");
+
+    let surface_id_for = |mutation: PendingAuthorizationMutation| async {
+        let service = CodexOAuthAdminService::new(
+            Arc::new(PendingStore::default()),
+            Arc::new(Exchanger {
+                id_token: "unused".to_owned(),
+            }),
+            Arc::new(MemoryAccountStore::default()),
+            CodexCredentialAdmin,
+            profile(),
+            crate::support::installation_strategy_port(
+                gateway_core::provider_ports::ProviderInstallationIdStrategy::EgressGrouped,
+            ),
+        )
+        .with_installation_derivation(deriver.clone());
+        let started = service
+            .start_authorization(StartCodexOAuthAuthorization { mutation })
+            .await
+            .expect("start OAuth authorization");
+        let outer = Url::parse(&started.authorization_url).expect("outer authorization URL");
+        outer
+            .query_pairs()
+            .find_map(|(key, value)| (key == "authorize_url").then(|| value.into_owned()))
+            .and_then(|value| Url::parse(&value).ok())
+            .expect("inner authorization URL")
+            .query_pairs()
+            .find_map(|(key, value)| {
+                (key == "source_surface_stable_id").then(|| value.into_owned())
+            })
+            .expect("surface stable ID")
+    };
+
+    // egress-grouped 下同代理组的两次 Create 共享 installation_id，
+    // OAuth URL 的 surface stable_id 派生链自动跟随；直连组独立。
+    let mut proxied = mutation();
+    proxied = proxied.with_outbound_proxy(Some(proxy.clone()));
+    let first = surface_id_for(proxied.clone()).await;
+
+    let mut proxied_second = mutation();
+    proxied_second = proxied_second.with_outbound_proxy(Some(proxy));
+    let second = surface_id_for(proxied_second).await;
+    assert_eq!(first, second, "same egress group shares stable id");
+
+    let direct = surface_id_for(mutation()).await;
+    assert_ne!(first, direct, "direct group differs from proxy group");
 }

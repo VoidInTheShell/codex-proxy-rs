@@ -114,6 +114,7 @@ async fn seed_account_with_plan(
             verified_account,
             next_refresh_at: Some(Utc::now() + chrono::Duration::minutes(30)),
             enabled: true,
+            installation_id: uuid::Uuid::new_v4().to_string(),
         })
         .await;
     store.account(account_id).expect("seeded account")

@@ -16,7 +16,8 @@ use gateway_admin::model::client_distribution::{
     ClientDownloadPackage, CodexDesktopWindowsDownloads,
 };
 use gateway_admin::model::settings::{
-    ModelMappings as DomainModelMappings, ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
+    ModelMappings as DomainModelMappings, ProviderInstallationIdStrategy, ReplaceRuntimeSettings,
+    RotationStrategy, RuntimeSettings,
 };
 use gateway_core::policy::CodexClientVersion;
 use gateway_core::routing::{PublicModelId, UpstreamModelId};
@@ -73,6 +74,7 @@ pub struct RuntimeSettingsView {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: String,
     pub updated_at: DateTime<Utc>,
     pub updated_at_display: String,
 }
@@ -119,6 +121,7 @@ pub struct UpdateRuntimeSettingsRequest {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: String,
 }
 
 impl UpdateRuntimeSettingsRequest {
@@ -160,6 +163,9 @@ impl UpdateRuntimeSettingsRequest {
         }
         if RotationStrategy::parse(&self.rotation_strategy).is_none() {
             return Err(WireValidationError::new("rotationStrategy"));
+        }
+        if ProviderInstallationIdStrategy::parse(&self.openai_installation_id_strategy).is_none() {
+            return Err(WireValidationError::new("openaiInstallationIdStrategy"));
         }
         validate_optional_client_version(
             self.min_codex_desktop_version.as_deref(),
@@ -241,6 +247,10 @@ impl UpdateRuntimeSettingsRequest {
             smart_scheduling: self.smart_scheduling,
             rotation_strategy: RotationStrategy::parse(&self.rotation_strategy)
                 .ok_or_else(|| WireValidationError::new("rotationStrategy"))?,
+            openai_installation_id_strategy: ProviderInstallationIdStrategy::parse(
+                &self.openai_installation_id_strategy,
+            )
+            .ok_or_else(|| WireValidationError::new("openaiInstallationIdStrategy"))?,
             min_codex_desktop_version: self.min_codex_desktop_version,
             min_codex_cli_version: self.min_codex_cli_version,
             usage_retention_days: u32::try_from(self.usage_retention_days)
@@ -307,6 +317,10 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
+            openai_installation_id_strategy: settings
+                .openai_installation_id_strategy
+                .as_str()
+                .to_owned(),
             updated_at_display: time.datetime(&settings.updated_at),
             updated_at: settings.updated_at,
         }
@@ -789,6 +803,7 @@ fn map_wire_error(error: WireValidationError) -> AdminError {
         "providerRequestProfiles" => "Provider 请求画像格式不合法或字段冲突".to_owned(),
         "minCodexDesktopVersion" => "Codex Desktop 最低版本格式不合法".to_owned(),
         "minCodexCliVersion" => "Codex CLI 最低版本格式不合法".to_owned(),
+        "openaiInstallationIdStrategy" => "installation_id 派生策略不合法".to_owned(),
         field => format!("{field} 字段不合法"),
     };
     AdminError::bad_request(message)

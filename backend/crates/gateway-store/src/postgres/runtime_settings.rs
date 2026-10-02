@@ -11,8 +11,8 @@ use sqlx::{PgPool, Postgres, Transaction};
 use gateway_core::account::RotationStrategy;
 use gateway_core::policy::CodexClientVersion;
 use gateway_core::provider_ports::{
-    ProviderFreezePolicy, ProviderRefreshPolicy, ProviderRuntimePolicyPort, ProviderStoreError,
-    ProviderStoreErrorKind, ProviderWarmupPolicy,
+    ProviderFreezePolicy, ProviderInstallationIdStrategy, ProviderRefreshPolicy,
+    ProviderRuntimePolicyPort, ProviderStoreError, ProviderStoreErrorKind, ProviderWarmupPolicy,
 };
 
 use crate::{Revision, StoreError, StoreResult, postgres_unavailable};
@@ -52,6 +52,7 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: String,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -115,6 +116,10 @@ impl fmt::Debug for RuntimeSettings {
                 &self.account_warmup_schedule_time,
             )
             .field("account_warmup_model", &self.account_warmup_model)
+            .field(
+                "openai_installation_id_strategy",
+                &self.openai_installation_id_strategy,
+            )
             .field("updated_at", &self.updated_at)
             .finish()
     }
@@ -155,6 +160,7 @@ pub struct RuntimeSettingsUpdate {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
+    pub openai_installation_id_strategy: String,
 }
 
 impl fmt::Debug for RuntimeSettingsUpdate {
@@ -195,6 +201,8 @@ impl RuntimeSettingsUpdate {
             || !valid_probe_model(self.account_warmup_model.as_deref())
             || (self.account_warmup_enabled && self.account_warmup_model.is_none())
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
+            || ProviderInstallationIdStrategy::parse(&self.openai_installation_id_strategy)
+                .is_none()
             || self.request_profile_updates.len() > 256
             || self
                 .request_profile_updates
@@ -269,7 +277,8 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                     account_auto_freeze_adaptive_concurrency,
-                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
+                    account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
+                    openai_installation_id_strategy
              from runtime_settings where id = 1",
         )
     .fetch_optional(pool)
@@ -429,6 +438,19 @@ impl ProviderRuntimePolicyPort for PgRuntimeSettingsRepository {
             )
         })
     }
+
+    fn load_installation_id_strategy(
+        &self,
+    ) -> futures::future::BoxFuture<'_, Result<ProviderInstallationIdStrategy, ProviderStoreError>>
+    {
+        Box::pin(async move {
+            let settings = RuntimeSettingsRepository::load_runtime_settings(self)
+                .await
+                .map_err(|_| provider_unavailable("load installation id strategy"))?;
+            ProviderInstallationIdStrategy::parse(&settings.openai_installation_id_strategy)
+                .ok_or_else(|| provider_invalid("decode installation id strategy"))
+        })
+    }
 }
 
 pub(crate) async fn load_runtime_settings_in_transaction(
@@ -444,7 +466,8 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_window_seconds, account_auto_freeze_duration_seconds,
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                 account_auto_freeze_adaptive_concurrency,
-                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model
+                account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
+                openai_installation_id_strategy
          from runtime_settings where id = 1",
     )
     .fetch_optional(&mut **transaction)
@@ -515,6 +538,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_warmup_model = $29,
                      smart_scheduling_json = $30,
                      openai_guardian_reserved_concurrency = $31,
+                     openai_installation_id_strategy = $32,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -562,6 +586,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.account_warmup_model.as_deref())
     .bind(sqlx::types::Json(update.smart_scheduling))
     .bind(i64::from(update.openai_guardian_reserved_concurrency))
+    .bind(&update.openai_installation_id_strategy)
     .fetch_optional(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("update runtime settings in transaction"))?
@@ -646,6 +671,7 @@ struct RuntimeSettingsRow {
     account_warmup_enabled: bool,
     account_warmup_schedule_time: String,
     account_warmup_model: Option<String>,
+    openai_installation_id_strategy: String,
 }
 
 fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSettings> {
@@ -700,6 +726,7 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         account_warmup_enabled: row.account_warmup_enabled,
         account_warmup_schedule_time: row.account_warmup_schedule_time,
         account_warmup_model: row.account_warmup_model,
+        openai_installation_id_strategy: row.openai_installation_id_strategy,
     })
 }
 

@@ -21,3 +21,16 @@ export const rotationOptions = [
     description: '优先复用最近使用的账号，直到不可用后再切换',
   },
 ] as const
+
+export const installationIdOptions = [
+  {
+    label: '账号独立',
+    value: 'per-account',
+    description: '每个账号生成独立 installation_id，与官方 Codex CLI 单设备多账号行为一致',
+  },
+  {
+    label: '出口分组',
+    value: 'egress-grouped',
+    description: '同一出口（直连或同代理 URL）共享稳定 installation_id，多账号对外表现为同一台设备',
+  },
+] as const

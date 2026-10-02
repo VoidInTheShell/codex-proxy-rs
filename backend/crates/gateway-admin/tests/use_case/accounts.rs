@@ -49,8 +49,8 @@ use gateway_admin::{
         },
         quota_forecast_sampling::{QuotaForecastHistory, QuotaForecastUsage},
         settings::{
-            AdminApiKey, AdminApiKeyMutation, ReplaceRuntimeSettings, RotationStrategy,
-            RuntimeSettings,
+            AdminApiKey, AdminApiKeyMutation, ProviderInstallationIdStrategy,
+            ReplaceRuntimeSettings, RotationStrategy, RuntimeSettings,
         },
     },
     ports::{
@@ -1133,6 +1133,7 @@ impl SettingsStore for StaticSettingsStore {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
+            openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
             updated_at: Utc::now(),
         })
     }
