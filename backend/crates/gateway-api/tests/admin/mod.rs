@@ -106,6 +106,7 @@ pub(super) struct AdminTestFixture {
     pub dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     pub provider_error: Arc<Mutex<Option<ProviderAdminError>>>,
     pub account: Arc<Mutex<Option<AccountPageItem>>>,
+    pub account_updates: Arc<Mutex<Vec<gateway_admin::model::accounts::UpdateAccount>>>,
 }
 
 impl AdminTestFixture {
@@ -174,6 +175,8 @@ impl AdminTestFixture {
         let dashboard_summary_range = Arc::new(Mutex::new(None));
         let provider_error = Arc::new(Mutex::new(None));
         let account = Arc::new(Mutex::new(None));
+        let account_updates: Arc<Mutex<Vec<gateway_admin::model::accounts::UpdateAccount>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let unused = Arc::new(UnusedStore {
             observations: observations.clone(),
             usage_records: Arc::clone(&usage_records),
@@ -183,6 +186,7 @@ impl AdminTestFixture {
             dashboard_observation: Arc::clone(&dashboard_observation),
             dashboard_summary_range: Arc::clone(&dashboard_summary_range),
             account: Arc::clone(&account),
+            account_updates: Arc::clone(&account_updates),
         });
         let plugin_ports = Arc::new(plugins::TestPluginPorts::default());
         let published_snapshot = gateway_core::runtime::RuntimeSnapshotHandle::default();
@@ -251,6 +255,7 @@ impl AdminTestFixture {
             dashboard_summary_range,
             provider_error,
             account,
+            account_updates,
         }
     }
 
@@ -1041,6 +1046,8 @@ struct UnusedStore {
     dashboard_observation: Arc<Mutex<Option<DashboardObservation>>>,
     dashboard_summary_range: Arc<Mutex<Option<TimeRange>>>,
     account: Arc<Mutex<Option<AccountPageItem>>>,
+    // 捕获 update_account 收到的命令，供 wire 层断言三态画像语义。
+    account_updates: Arc<Mutex<Vec<gateway_admin::model::accounts::UpdateAccount>>>,
 }
 
 struct UnusedClientKeyVerifier;
@@ -1198,9 +1205,10 @@ impl AccountStore for UnusedStore {
 
     async fn update_account(
         &self,
-        _: UpdateAccount,
+        command: UpdateAccount,
         _: &MutationContext,
     ) -> AdminStoreResult<AccountUpdateResult> {
+        self.account_updates.lock().unwrap().push(command);
         Err(unavailable("account enabled"))
     }
 
@@ -1415,6 +1423,14 @@ impl ProviderAdmin for UnusedProvider {
 
     fn provider_kind(&self) -> &ProviderKind {
         &self.kind
+    }
+
+    // 账号画像校验链路回显文档，让合法画像通过 use case 前置校验到达 store。
+    fn preview_client_profile(
+        &self,
+        configuration: &gateway_core::account::OpaqueProviderData,
+    ) -> Result<gateway_core::account::OpaqueProviderData, ProviderAdminError> {
+        Ok(configuration.clone())
     }
 
     async fn account_unavailable(&self, _: &ProviderAccountId) {}

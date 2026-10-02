@@ -268,10 +268,12 @@ impl UpdateAccountRequest {
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
-            request_profile: self
-                .request_profile
-                .map(gateway_core::account::OpaqueProviderData::new)
-                .map(Some),
+            // 反序列化保证字段必填：缺失报 422；显式 null 走 None 分支表示清除覆盖，
+            // 对象表示设置覆盖，映射到 core 的三态语义（None 保留 / Some(None) 清除 / Some(Some) 设置）。
+            request_profile: Some(
+                self.request_profile
+                    .map(gateway_core::account::OpaqueProviderData::new),
+            ),
         };
         Ok((settings, connection))
     }
