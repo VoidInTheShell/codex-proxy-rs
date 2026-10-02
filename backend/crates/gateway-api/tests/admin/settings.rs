@@ -71,7 +71,7 @@ fn update_body() -> Value {
         "accountWarmupScheduleTime": "08:00",
         "accountWarmupModel": null,
         "egressSharingAlertEnabled": true,
-        "egressSharingAlertThreshold": 2
+        "egressSharingAlertThreshold": 2,
         "openaiInstallationIdStrategy": "per-account"
     })
 }

@@ -299,10 +299,6 @@ mod unit {
     use super::*;
     use uuid::Uuid;
 
-
-    
-        
-    
     fn deriver() -> CodexInstallationIdDeriver {
         CodexInstallationIdDeriver::load_or_create(std::path::Path::new(
             "/tmp/codex-installation-id-deriver-test-secret",

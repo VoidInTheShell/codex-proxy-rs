@@ -112,6 +112,8 @@ fn runtime_settings(alert_enabled: bool, alert_threshold: u32) -> RuntimeSetting
         account_warmup_model: None,
         egress_sharing_alert_enabled: alert_enabled,
         egress_sharing_alert_threshold: alert_threshold,
+        openai_installation_id_strategy:
+            gateway_core::provider_ports::ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc::now(),
     }
 }
