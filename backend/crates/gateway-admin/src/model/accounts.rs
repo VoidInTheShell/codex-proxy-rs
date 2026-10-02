@@ -39,6 +39,8 @@ pub struct AccountImportSettings {
     pub weight: AccountWeight,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
+    /// 账号级请求画像选择；`None` 表示不设置覆盖，保留账号现有值。
+    pub request_profile: Option<gateway_core::account::OpaqueProviderData>,
 }
 
 /// 账号列表排序字段。
@@ -124,6 +126,8 @@ pub struct AccountRecord {
     pub weight: AccountWeight,
     pub model_access: gateway_core::account::AccountModelAccess,
     pub outbound_proxy: Option<gateway_core::account::OutboundProxy>,
+    /// 账号级请求画像选择；`None` 表示未配置覆盖。
+    pub request_profile: Option<gateway_core::account::OpaqueProviderData>,
     pub credential_state: CredentialState,
     pub credential_observed_at: DateTime<Utc>,
     pub quota: QuotaState,
@@ -260,6 +264,8 @@ pub struct UpdateAccount {
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<gateway_core::routing::AccountGroupId>,
     pub outbound_proxy: Option<super::proxies::AccountProxySelection>,
+    /// 账号级请求画像选择；`None` 保留现有值，`Some(None)` 清除为继承，`Some(Some)` 设置。
+    pub request_profile: Option<Option<gateway_core::account::OpaqueProviderData>>,
 }
 
 /// 账号更新结果。

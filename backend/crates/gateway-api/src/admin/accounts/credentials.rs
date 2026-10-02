@@ -29,6 +29,8 @@ pub struct AccountImportSettingsRequest {
     pub weight: u64,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<String>,
+    /// 导入时可选设置账号级请求画像；省略表示不设置覆盖。
+    pub request_profile: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl AccountImportSettingsRequest {
@@ -37,6 +39,9 @@ impl AccountImportSettingsRequest {
         parse_concurrency_limit(self.concurrency_limit)?;
         parse_account_weight(self.weight)?;
         validate_wire_group_ids(&self.group_ids)?;
+        if let Some(profile) = &self.request_profile {
+            validate_request_profile_size(profile, "requestProfile")?;
+        }
         Ok(())
     }
 
@@ -50,6 +55,9 @@ impl AccountImportSettingsRequest {
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
+            request_profile: self
+                .request_profile
+                .map(gateway_core::account::OpaqueProviderData::new),
         })
     }
 }
@@ -220,6 +228,9 @@ pub struct UpdateAccountRequest {
     pub weight: u64,
     pub model_access: Option<gateway_core::account::AccountModelAccess>,
     pub group_ids: Vec<String>,
+    /// 必填可空：`null` 清除账号覆盖，对象设置覆盖；文档格式与 client key 画像一致。
+    #[serde(deserialize_with = "deserialize_required_nullable_profile")]
+    pub request_profile: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl UpdateAccountRequest {
@@ -232,6 +243,9 @@ impl UpdateAccountRequest {
         parse_concurrency_limit(self.concurrency_limit)?;
         parse_account_weight(self.weight)?;
         validate_wire_group_ids(&self.group_ids)?;
+        if let Some(profile) = &self.request_profile {
+            validate_request_profile_size(profile, "requestProfile")?;
+        }
         Ok(())
     }
 
@@ -254,9 +268,33 @@ impl UpdateAccountRequest {
             weight: parse_account_weight(self.weight)?,
             model_access: self.model_access,
             group_ids: validate_wire_group_ids(&self.group_ids)?,
+            request_profile: self
+                .request_profile
+                .map(gateway_core::account::OpaqueProviderData::new)
+                .map(Some),
         };
         Ok((settings, connection))
     }
+}
+
+/// 必填可空的画像字段：JSON 缺字段报错，显式 `null` 表示清除覆盖。
+fn deserialize_required_nullable_profile<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Map<String, serde_json::Value>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Option::<serde_json::Map<String, serde_json::Value>>::deserialize(deserializer)
+}
+
+fn validate_request_profile_size(
+    profile: &serde_json::Map<String, serde_json::Value>,
+    field: &'static str,
+) -> Result<(), WireValidationError> {
+    if serde_json::to_vec(profile).map_or(true, |encoded| encoded.len() > 64 * 1024) {
+        return Err(WireValidationError::new(field));
+    }
+    Ok(())
 }
 
 /// 编辑 OpenAI 账号的连接设置；OAuth 仅接受传输方式。

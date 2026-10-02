@@ -1,4 +1,5 @@
 mod account_isolation;
+mod account_profile;
 mod capacity;
 mod precommit;
 mod response_interrupt;

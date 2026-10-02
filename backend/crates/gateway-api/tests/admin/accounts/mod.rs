@@ -414,7 +414,8 @@ mod batch_update {
             "enabled": true,
             "concurrencyLimit": 4294967295_u64,
             "weight": 100,
-            "groupIds": []
+            "groupIds": [],
+            "requestProfile": null
         }))
         .expect("deserialize single update");
         request.validate().expect("validate single update");
@@ -443,7 +444,7 @@ fn single_update_should_accept_optional_unicode_and_multiline_notes() {
     ] {
         let request: UpdateAccountRequest = serde_json::from_value(json!({
             "accountId": "acct_notes", "enabled": true, "concurrencyLimit": null,
-            "weight": 1, "groupIds": [], "notes": notes
+            "weight": 1, "groupIds": [], "requestProfile": null, "notes": notes
         }))
         .unwrap();
         request.validate().expect("accept bounded notes");
@@ -461,7 +462,7 @@ fn single_update_should_reject_oversized_notes_and_control_characters() {
     ] {
         let request: UpdateAccountRequest = serde_json::from_value(json!({
             "accountId": "acct_notes", "enabled": true, "concurrencyLimit": null,
-            "weight": 1, "groupIds": [], "notes": notes
+            "weight": 1, "groupIds": [], "requestProfile": null, "notes": notes
         }))
         .unwrap();
         assert_eq!(request.validate().unwrap_err().field(), "notes");
@@ -653,7 +654,8 @@ mod actions {
             "enabled": true,
             "concurrencyLimit": null,
             "weight": 1,
-            "groupIds": []
+            "groupIds": [],
+            "requestProfile": null
         });
         serde_json::from_value::<UpdateAccountRequest>(request.clone())
             .expect("decode combined save")
@@ -686,6 +688,7 @@ mod actions {
             "concurrencyLimit": null,
             "weight": 1,
             "groupIds": [],
+            "requestProfile": null,
             "connection": {"baseUrl": "https://api.example.invalid/v1", "transport": "http"}
         });
         for (field, value, expected) in [

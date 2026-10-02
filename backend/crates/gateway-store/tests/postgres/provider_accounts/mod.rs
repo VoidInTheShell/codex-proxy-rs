@@ -1183,6 +1183,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1264,6 +1265,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        request_profile: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1287,6 +1289,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
@@ -1303,6 +1306,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
@@ -1336,6 +1340,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         request_id: "notes-edit".to_owned(),
     };
     let command = UpdateAccount {
+        request_profile: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1367,6 +1372,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 ..command.clone()
             },
@@ -1421,6 +1427,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
                 weight: gateway_core::account::AccountWeight::DEFAULT,
                 group_ids: vec![],
                 model_access: None,
+                request_profile: None,
             }),
             outbound_proxy: None,
             audit: audit("audit_notes_reimport", "import", "acct_notes"),
@@ -1442,6 +1449,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: Some(" \n\t ".to_owned()),
                 ..command
             },
@@ -1485,6 +1493,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
     let result = admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -1981,6 +1990,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                     concurrency_limit: None,
                     weight: gateway_core::account::AccountWeight::new(9).expect("weight"),
                     group_ids: Vec::new(),
+                    request_profile: None,
                 }),
                 pending: PendingAuthorizationMutation::new(
                     provider_kind.clone(),
@@ -2511,6 +2521,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
+            request_profile: None,
             account_ids: vec!["acct_admin_a".to_owned()],
             enabled: Some(false),
             concurrency_limit: Some(None),
@@ -2576,6 +2587,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     .await
     .expect("seed group");
     let settings = UpdateAccount {
+        request_profile: None,
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -2625,6 +2637,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_group",
             2,
             UpdateAccount {
+                request_profile: None,
                 enabled: true,
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092").unwrap(),
@@ -2636,6 +2649,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_proxy",
             2,
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(AccountProxySelection::Saved("missing_proxy".to_owned())),
                 ..settings.clone()
             },
@@ -2644,6 +2658,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "stale_credential",
             1,
             UpdateAccount {
+                request_profile: None,
                 enabled: true,
                 notes: Some("must not persist".to_owned()),
                 ..settings.clone()
@@ -3303,6 +3318,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
@@ -3361,6 +3377,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .await
     .expect("seed group");
     let settings = AccountImportSettings {
+        request_profile: None,
         notes: Some("  批量新建\n团队备用  ".to_owned()),
         model_access: Default::default(),
         enabled: false,
@@ -3413,12 +3430,14 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("existing account");
     for invalid_settings in [
         AccountImportSettings {
+            request_profile: None,
             group_ids: vec![
                 AccountGroupId::new("grp_00000000000000000000000000000092").expect("missing group"),
             ],
             ..settings.clone()
         },
         AccountImportSettings {
+            request_profile: None,
             notes: Some("备".repeat(501)),
             ..settings
         },

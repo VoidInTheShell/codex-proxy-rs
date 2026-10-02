@@ -2,8 +2,10 @@
 import type { AccountCreateForm } from './model'
 import type { AccountGroup } from '@/api'
 import { BaseFormItem, BaseTextarea } from '@codex-proxy/ui'
+import AccountRequestProfileField from '../AccountRequestProfileField.vue'
 import AccountSettingsFields from '../AccountSettingsFields.vue'
 import AccountProviderChooser from './AccountProviderChooser.vue'
+import { accountCreateProvider } from './model'
 
 defineProps<{
   groups: AccountGroup[]
@@ -37,6 +39,21 @@ const form = defineModel<AccountCreateForm>({ required: true })
       :disabled="disabled"
       :proxy-error="proxyError"
     />
+    <fieldset class="m-0 min-w-0 border-0 p-0">
+      <legend class="mb-3 p-0 text-cp font-medium text-cp-text-secondary">
+        上游身份
+      </legend>
+      <p class="m-0 text-cp-sm text-cp-text-secondary">
+        独立配置时该账号对上游呈现此设备画像；跟随调用方时按 Client Key 覆盖与全局默认解析。
+      </p>
+      <AccountRequestProfileField
+        v-model="form.requestProfile"
+        :provider="accountCreateProvider(form)"
+        :active="true"
+        :disabled="disabled"
+      />
+    </fieldset>
+
     <BaseFormItem label="备注">
       <BaseTextarea
         v-model="form.notes"

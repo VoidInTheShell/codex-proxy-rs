@@ -213,7 +213,7 @@ impl CodexProvider {
         });
         let events = cold_json_response_stream(ColdJsonResponse {
             client: self
-                .client_for_request(&context)?
+                .client_for_request(&context, lease.account())?
                 .for_account(lease.account())
                 .map_err(|_| {
                     provider_error(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
