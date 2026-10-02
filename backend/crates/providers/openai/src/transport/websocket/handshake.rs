@@ -21,7 +21,9 @@ use crate::{
         responses::CodexResponsesRequest, websocket::websocket_response_create_payload_text,
     },
     transport::{
-        client::{CodexClientVisibleUpstreamResponse, parse_retry_after},
+        client::{
+            CodexClientVisibleUpstreamResponse, parse_retry_after, upstream_env_proxy_inherited,
+        },
         diagnostics::CodexUpstreamSendPhase,
         endpoints::CODEX_RESPONSES_PATH,
         response_meta, tls,
@@ -191,12 +193,18 @@ async fn connect_websocket(
             crate::transport::connection::acquire().await
         }
         .map_err(tungstenite::Error::Io)?;
-        // Preserve the native direct handshake; explicit egress never inherits a global proxy.
+        // 直连出口策略与 HTTP路径对齐：默认不继承进程代理环境变量。钉住的
+        // tokio-tungstenite fork 在 proxy feature下会读取 http_proxy等环境
+        // 变量，因此默认仅在确认无环境代理时才使用原生拨号；存在环境代理时
+        // 改走 dial_account 的显式直连拨号（此处探测只为保护不变量，从不继承）。
+        // 显式开启 CODEX_UPSTREAM_ENV_PROXY 后跳过探测，原生拨号按官方
+        // TransportDefault 语义继承环境代理。账号代理一律走 dial_account。
         if connection.outbound_proxy.is_none()
-            && matches!(
-                tungstenite::proxy::ProxyConfig::from_env(request.uri()),
-                Ok(None)
-            )
+            && (upstream_env_proxy_inherited()
+                || matches!(
+                    tungstenite::proxy::ProxyConfig::from_env(request.uri()),
+                    Ok(None)
+                ))
         {
             let (websocket, response) =
                 connect_async_tls_with_config(request, Some(websocket_config()), false, connector)
