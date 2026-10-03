@@ -5,7 +5,6 @@ mod auth_key;
 mod backup;
 mod client_keys;
 mod credentials;
-mod egress;
 mod freeze_recovery;
 mod import_tasks;
 mod observability;

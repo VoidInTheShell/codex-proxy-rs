@@ -11,7 +11,6 @@ import AccountBatchEditModal from './components/AccountBatchEditModal.vue'
 import AccountConnectionTestModal from './components/AccountConnectionTestModal.vue'
 import AccountCreateModal from './components/AccountCreateModal/index.vue'
 import AccountEditModal from './components/AccountEditModal.vue'
-import AccountEgressCard from './components/AccountEgressCard.vue'
 import AccountFilters from './components/AccountFilters.vue'
 import AccountIdentityCell from './components/AccountIdentityCell.vue'
 import AccountImportTasks from './components/AccountImportTasks/index.vue'
@@ -29,7 +28,6 @@ import { useAccountImportTasks } from './composables/useAccountImportTasks'
 import { useAccountMutations } from './composables/useAccountMutations'
 import { useAccountsQuery } from './composables/useAccountsQuery'
 import { useAccountsTable } from './composables/useAccountsTable'
-import { useEgressDistribution } from './composables/useEgressDistribution'
 import { accountColumns, derivedAccountStatus } from './constants'
 
 const selectedIds = ref<Set<string>>(new Set())
@@ -137,11 +135,6 @@ const {
   handleTestConnection,
 } = useAccountConnectionTest({ reload: refreshAccountsSilently })
 
-// 出口分布只读视图：与账号列表并列展示分组事实，不参与增删改流程。
-const {
-  distribution: egressDistribution,
-} = useEgressDistribution()
-
 const {
   expandedAccountIds,
   allSelected,
@@ -210,12 +203,6 @@ const {
     />
 
     <AccountOverviewCards :summary="accountSummary" />
-
-    <AccountEgressCard
-      v-if="egressDistribution && egressDistribution.groups.length > 0"
-      class="mt-4"
-      :distribution="egressDistribution"
-    />
 
     <BaseCard
       class="mt-4 flex flex-col xl:h-[calc(100dvh-250px)] xl:min-h-125"

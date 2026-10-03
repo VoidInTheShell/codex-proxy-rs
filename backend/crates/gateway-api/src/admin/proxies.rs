@@ -10,8 +10,8 @@ use axum::{
 use gateway_admin::model::{
     PageSize, Revision,
     proxies::{
-        EgressDistribution, EgressGroupKind, NewProxy, ProxyAccountListQuery, ProxyListQuery,
-        ProxyMutation, ProxyRecord, ProxyTestResult, UpdateProxy,
+        NewProxy, ProxyAccountListQuery, ProxyListQuery, ProxyMutation, ProxyRecord,
+        ProxyTestResult, UpdateProxy,
     },
 };
 use serde::{Deserialize, Serialize};
@@ -195,73 +195,6 @@ struct ProxyPageView {
 }
 
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EgressGroupAccountView {
-    id: String,
-    name: String,
-    provider: String,
-    enabled: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EgressGroupView {
-    kind: &'static str,
-    proxy_id: Option<String>,
-    name: Option<String>,
-    endpoint: Option<String>,
-    location: Option<gateway_core::account::RequestLocation>,
-    exit_ip: Option<String>,
-    account_count: u64,
-    accounts: Vec<EgressGroupAccountView>,
-    alerting: bool,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct EgressDistributionView {
-    groups: Vec<EgressGroupView>,
-    alert_enabled: bool,
-    alert_threshold: u32,
-}
-
-impl From<EgressDistribution> for EgressDistributionView {
-    fn from(distribution: EgressDistribution) -> Self {
-        Self {
-            groups: distribution
-                .groups
-                .into_iter()
-                .map(|group| EgressGroupView {
-                    kind: match group.kind {
-                        EgressGroupKind::Direct => "direct",
-                        EgressGroupKind::Proxy => "proxy",
-                    },
-                    proxy_id: group.proxy_id,
-                    name: group.name,
-                    endpoint: group.endpoint,
-                    location: group.location,
-                    exit_ip: group.exit_ip.map(|ip| ip.to_string()),
-                    account_count: group.account_count,
-                    accounts: group
-                        .accounts
-                        .into_iter()
-                        .map(|account| EgressGroupAccountView {
-                            id: account.id,
-                            name: account.name,
-                            provider: account.provider_kind,
-                            enabled: account.enabled,
-                        })
-                        .collect(),
-                    alerting: group.alerting,
-                })
-                .collect(),
-            alert_enabled: distribution.alert_enabled,
-            alert_threshold: distribution.alert_threshold,
-        }
-    }
-}
-
-#[derive(Serialize)]
 struct ProxyAccountPageView {
     items: Vec<ProxyAccountView>,
     page: PageMeta,
@@ -290,10 +223,6 @@ where
     Router::new()
         .route("/api/admin/proxies", get(list::<S>))
         .route("/api/admin/proxies/accounts", get(list_accounts::<S>))
-        .route(
-            "/api/admin/proxies/egress-distribution",
-            get(egress_distribution::<S>),
-        )
         .route(
             "/api/admin/proxies/accounts/remove",
             post(remove_account::<S>),
@@ -410,25 +339,6 @@ where
                 u32::try_from(total_pages).unwrap_or(u32::MAX),
             ),
         }),
-    ))
-}
-
-async fn egress_distribution<S>(
-    _: AdminAuth,
-    State(state): State<S>,
-) -> Result<impl IntoResponse, AdminError>
-where
-    S: SessionState + Send + Sync,
-{
-    let result = state
-        .admin_services()
-        .proxies()
-        .egress_distribution()
-        .await
-        .map_err(map_error)?;
-    Ok(AdminResponse::new(
-        StatusCode::OK,
-        AdminEnvelope::ok(EgressDistributionView::from(result)),
     ))
 }
 

@@ -128,9 +128,7 @@ fn validate_settings(command: &ReplaceRuntimeSettings) -> Result<(), AdminError>
         && i64::try_from(command.request_interval_ms).is_ok()
         && (2..=1_000).contains(&command.account_auto_freeze_threshold)
         && (60..=3_600).contains(&command.account_auto_freeze_window_seconds)
-        && (300..=604_800).contains(&command.account_auto_freeze_duration_seconds)
-        // 出口共享提醒阈值与存储层同一范围约束，关闭开关不放松取值。
-        && (2..=1_000).contains(&command.egress_sharing_alert_threshold);
+        && (300..=604_800).contains(&command.account_auto_freeze_duration_seconds);
     if valid {
         Ok(())
     } else {

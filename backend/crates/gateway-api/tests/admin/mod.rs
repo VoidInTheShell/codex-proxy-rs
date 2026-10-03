@@ -129,36 +129,10 @@ impl AdminTestFixture {
         Self::with_dependencies(Arc::new(UnusedSystem), None, timezone).await
     }
 
-    /// 指定代理存储（出口分布 API 测试注入定制事实）。
-    pub async fn with_proxies(proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>) -> Self {
-        Self::with_dependencies_and_proxies(
-            Arc::new(UnusedSystem),
-            None,
-            Default::default(),
-            proxies,
-        )
-        .await
-    }
-
     async fn with_dependencies(
         system: Arc<dyn SystemOperations>,
         verifier: Option<Arc<dyn ClientKeyVerifier>>,
         timezone: gateway_core::time::DeploymentTimeZone,
-    ) -> Self {
-        Self::with_dependencies_and_proxies(
-            system,
-            verifier,
-            timezone,
-            Arc::new(proxies::MemoryProxies::default()),
-        )
-        .await
-    }
-
-    async fn with_dependencies_and_proxies(
-        system: Arc<dyn SystemOperations>,
-        verifier: Option<Arc<dyn ClientKeyVerifier>>,
-        timezone: gateway_core::time::DeploymentTimeZone,
-        proxies: Arc<dyn gateway_admin::ports::proxy::ProxyStore>,
     ) -> Self {
         let api_key = Arc::new(Mutex::new(None));
         let auth = Arc::new(MemoryAuthStore::new(api_key.clone()));
@@ -195,7 +169,7 @@ impl AdminTestFixture {
                 unused.clone(),
                 unused.clone(),
                 account_groups.clone(),
-                proxies,
+                Arc::new(proxies::MemoryProxies::default()),
             ),
             auth.clone(),
             client_keys.clone(),
@@ -620,8 +594,6 @@ impl SettingsStore for MemorySettingsStore {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
-            egress_sharing_alert_enabled: true,
-            egress_sharing_alert_threshold: 2,
             openai_installation_id_strategy: command.openai_installation_id_strategy,
             updated_at: Utc::now(),
         };
@@ -1643,8 +1615,6 @@ fn test_runtime_settings() -> RuntimeSettings {
         account_warmup_enabled: false,
         account_warmup_schedule_time: "08:00".to_owned(),
         account_warmup_model: None,
-        egress_sharing_alert_enabled: true,
-        egress_sharing_alert_threshold: 2,
         openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         updated_at: Utc::now(),
     }

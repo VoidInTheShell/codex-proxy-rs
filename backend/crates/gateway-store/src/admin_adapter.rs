@@ -115,8 +115,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                 account_warmup_enabled: command.account_warmup_enabled,
                 account_warmup_schedule_time: command.account_warmup_schedule_time,
                 account_warmup_model: command.account_warmup_model,
-                egress_sharing_alert_enabled: command.egress_sharing_alert_enabled,
-                egress_sharing_alert_threshold: command.egress_sharing_alert_threshold,
                 openai_installation_id_strategy: command
                     .openai_installation_id_strategy
                     .as_str()
@@ -147,7 +145,6 @@ impl SettingsStore for AdminSettingsStoreAdapter {
                     "min_codex_cli_version".to_owned(),
                     "retention".to_owned(),
                     "account_auto_freeze".to_owned(),
-                    "egress_sharing_alert".to_owned(),
                 ],
             ),
         };
@@ -279,8 +276,6 @@ pub(crate) fn admin_runtime_settings(
         account_warmup_enabled: settings.account_warmup_enabled,
         account_warmup_schedule_time: settings.account_warmup_schedule_time,
         account_warmup_model: settings.account_warmup_model,
-        egress_sharing_alert_enabled: settings.egress_sharing_alert_enabled,
-        egress_sharing_alert_threshold: settings.egress_sharing_alert_threshold,
         updated_at: settings.updated_at,
     })
 }

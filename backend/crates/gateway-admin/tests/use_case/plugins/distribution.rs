@@ -17,8 +17,8 @@ use gateway_admin::{
             instances::{PluginInstance, PluginInstanceMutation, PluginInstanceSnapshot},
         },
         proxies::{
-            EgressFacts, NewProxy, ProxyAccountListQuery, ProxyAccountPage, ProxyListQuery,
-            ProxyMutation, ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
+            NewProxy, ProxyAccountListQuery, ProxyAccountPage, ProxyListQuery, ProxyMutation,
+            ProxyPage, ProxyRecord, ProxyTestResult, UpdateProxy,
         },
     },
     ports::{
@@ -107,10 +107,6 @@ impl ProxyStore for Fixture {
     }
 
     async fn list_accounts(&self, _: ProxyAccountListQuery) -> AdminStoreResult<ProxyAccountPage> {
-        unreachable!()
-    }
-
-    async fn egress_facts(&self) -> AdminStoreResult<EgressFacts> {
         unreachable!()
     }
 

@@ -956,8 +956,6 @@ impl SettingsStore for FixtureSettingsStore {
             account_warmup_enabled: false,
             account_warmup_schedule_time: "08:00".to_owned(),
             account_warmup_model: None,
-            egress_sharing_alert_enabled: true,
-            egress_sharing_alert_threshold: 2,
             openai_installation_id_strategy: ProviderInstallationIdStrategy::PerAccount,
         })
     }

@@ -60,8 +60,6 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: ProviderInstallationIdStrategy,
     pub updated_at: DateTime<Utc>,
 }
@@ -103,8 +101,6 @@ pub struct ReplaceRuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: ProviderInstallationIdStrategy,
 }
 
@@ -213,8 +209,6 @@ impl From<RuntimeSettings> for ReplaceRuntimeSettings {
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
-            egress_sharing_alert_enabled: settings.egress_sharing_alert_enabled,
-            egress_sharing_alert_threshold: settings.egress_sharing_alert_threshold,
             openai_installation_id_strategy: settings.openai_installation_id_strategy,
         }
     }

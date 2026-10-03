@@ -53,8 +53,6 @@ export interface RuntimeSettings {
   accountWarmupEnabled: boolean
   accountWarmupScheduleTime: string
   accountWarmupModel: string | null
-  egressSharingAlertEnabled: boolean
-  egressSharingAlertThreshold: number
   updatedAt: string
   updatedAtDisplay: string
 }

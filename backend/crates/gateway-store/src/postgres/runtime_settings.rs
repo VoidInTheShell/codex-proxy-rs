@@ -52,8 +52,6 @@ pub struct RuntimeSettings {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: String,
     pub updated_at: DateTime<Utc>,
 }
@@ -119,14 +117,6 @@ impl fmt::Debug for RuntimeSettings {
             )
             .field("account_warmup_model", &self.account_warmup_model)
             .field(
-                "egress_sharing_alert_enabled",
-                &self.egress_sharing_alert_enabled,
-            )
-            .field(
-                "egress_sharing_alert_threshold",
-                &self.egress_sharing_alert_threshold,
-            )
-            .field(
                 "openai_installation_id_strategy",
                 &self.openai_installation_id_strategy,
             )
@@ -170,8 +160,6 @@ pub struct RuntimeSettingsUpdate {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: String,
 }
 
@@ -212,8 +200,6 @@ impl RuntimeSettingsUpdate {
             )
             || !valid_probe_model(self.account_warmup_model.as_deref())
             || (self.account_warmup_enabled && self.account_warmup_model.is_none())
-            // 出口共享提醒阈值与过载保护阈值同一量级约束；关闭开关不放松取值范围。
-            || !(2..=1_000).contains(&self.egress_sharing_alert_threshold)
             || RotationStrategy::parse(&self.rotation_strategy).is_none()
             || ProviderInstallationIdStrategy::parse(&self.openai_installation_id_strategy)
                 .is_none()
@@ -292,7 +278,6 @@ pub(crate) async fn load_runtime_settings_from_pool(pool: &PgPool) -> StoreResul
                     account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                     account_auto_freeze_adaptive_concurrency,
                     account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
-                    egress_sharing_alert_enabled, egress_sharing_alert_threshold,
                     openai_installation_id_strategy
              from runtime_settings where id = 1",
         )
@@ -482,7 +467,6 @@ pub(crate) async fn load_runtime_settings_in_transaction(
                 account_auto_freeze_probe_enabled, account_auto_freeze_probe_model,
                 account_auto_freeze_adaptive_concurrency,
                 account_warmup_enabled, account_warmup_schedule_time, account_warmup_model,
-                egress_sharing_alert_enabled, egress_sharing_alert_threshold,
                 openai_installation_id_strategy
          from runtime_settings where id = 1",
     )
@@ -554,9 +538,7 @@ pub(crate) async fn update_runtime_settings_in_transaction(
                      account_warmup_model = $29,
                      smart_scheduling_json = $30,
                      openai_guardian_reserved_concurrency = $31,
-                     egress_sharing_alert_enabled = $32,
-                     egress_sharing_alert_threshold = $33,
-                     openai_installation_id_strategy = $34,
+                     openai_installation_id_strategy = $32,
 	                 updated_at = now()
 	             where id = 1
 	             returning config_revision",
@@ -604,8 +586,6 @@ pub(crate) async fn update_runtime_settings_in_transaction(
     .bind(update.account_warmup_model.as_deref())
     .bind(sqlx::types::Json(update.smart_scheduling))
     .bind(i64::from(update.openai_guardian_reserved_concurrency))
-    .bind(update.egress_sharing_alert_enabled)
-    .bind(i64::from(update.egress_sharing_alert_threshold))
     .bind(&update.openai_installation_id_strategy)
     .fetch_optional(&mut **transaction)
     .await
@@ -691,8 +671,6 @@ struct RuntimeSettingsRow {
     account_warmup_enabled: bool,
     account_warmup_schedule_time: String,
     account_warmup_model: Option<String>,
-    egress_sharing_alert_enabled: bool,
-    egress_sharing_alert_threshold: i64,
     openai_installation_id_strategy: String,
 }
 
@@ -748,8 +726,6 @@ fn runtime_settings_from_row(row: RuntimeSettingsRow) -> StoreResult<RuntimeSett
         account_warmup_enabled: row.account_warmup_enabled,
         account_warmup_schedule_time: row.account_warmup_schedule_time,
         account_warmup_model: row.account_warmup_model,
-        egress_sharing_alert_enabled: row.egress_sharing_alert_enabled,
-        egress_sharing_alert_threshold: to_u32(row.egress_sharing_alert_threshold)?,
         openai_installation_id_strategy: row.openai_installation_id_strategy,
     })
 }

@@ -74,8 +74,6 @@ pub struct RuntimeSettingsView {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: String,
     pub updated_at: DateTime<Utc>,
     pub updated_at_display: String,
@@ -123,8 +121,6 @@ pub struct UpdateRuntimeSettingsRequest {
     pub account_warmup_enabled: bool,
     pub account_warmup_schedule_time: String,
     pub account_warmup_model: Option<String>,
-    pub egress_sharing_alert_enabled: bool,
-    pub egress_sharing_alert_threshold: u32,
     pub openai_installation_id_strategy: String,
 }
 
@@ -217,10 +213,6 @@ impl UpdateRuntimeSettingsRequest {
         if self.account_warmup_enabled && self.account_warmup_model.is_none() {
             return Err(WireValidationError::new("accountWarmupModel"));
         }
-        // 与存储层约束一致：关闭开关不放松阈值范围，避免开关状态影响取值合法性。
-        if !(2..=1_000).contains(&self.egress_sharing_alert_threshold) {
-            return Err(WireValidationError::new("egressSharingAlertThreshold"));
-        }
         Ok(())
     }
 
@@ -278,8 +270,6 @@ impl UpdateRuntimeSettingsRequest {
             account_warmup_enabled: self.account_warmup_enabled,
             account_warmup_schedule_time: self.account_warmup_schedule_time,
             account_warmup_model: self.account_warmup_model,
-            egress_sharing_alert_enabled: self.egress_sharing_alert_enabled,
-            egress_sharing_alert_threshold: self.egress_sharing_alert_threshold,
         })
     }
 }
@@ -327,8 +317,6 @@ impl From<(RuntimeSettings, crate::time::TimePresenter)> for RuntimeSettingsView
             account_warmup_enabled: settings.account_warmup_enabled,
             account_warmup_schedule_time: settings.account_warmup_schedule_time,
             account_warmup_model: settings.account_warmup_model,
-            egress_sharing_alert_enabled: settings.egress_sharing_alert_enabled,
-            egress_sharing_alert_threshold: settings.egress_sharing_alert_threshold,
             openai_installation_id_strategy: settings
                 .openai_installation_id_strategy
                 .as_str()

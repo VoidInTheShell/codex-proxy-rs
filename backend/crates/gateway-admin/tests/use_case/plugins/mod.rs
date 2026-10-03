@@ -56,10 +56,6 @@ impl gateway_admin::ports::proxy::ProxyStore for TestPluginPorts {
         Err(unavailable())
     }
 
-    async fn egress_facts(&self) -> AdminStoreResult<gateway_admin::model::proxies::EgressFacts> {
-        Err(unavailable())
-    }
-
     async fn get(&self, _: &str) -> AdminStoreResult<gateway_admin::model::proxies::ProxyRecord> {
         Err(unavailable())
     }
