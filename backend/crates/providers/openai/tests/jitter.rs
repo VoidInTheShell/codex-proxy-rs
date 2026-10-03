@@ -48,15 +48,38 @@ fn quota_failure_refresh_delay_stays_within_settlement_window() {
         Duration::from_secs(2),
         "随机源退化时回到固定 2s 基准"
     );
-    for sample in [1, 1_000, u64::MAX / 3, u64::MAX / 2, u64::MAX - 1, u64::MAX] {
-        let delay = quota_failure_refresh_delay(Some(sample));
-        assert!(delay >= Duration::from_secs(1), "sample {sample} 低于 1s");
-        assert!(delay < Duration::from_secs(3), "sample {sample} 达到 3s");
+    let delays: Vec<_> = [1, 1_000, u64::MAX / 3, u64::MAX / 2, u64::MAX - 1, u64::MAX]
+        .into_iter()
+        .map(|sample| (sample, quota_failure_refresh_delay(Some(sample))))
+        .collect();
+    for (sample, delay) in &delays {
+        assert!(delay >= &Duration::from_secs(1), "sample {sample} 低于 1s");
+        assert!(delay < &Duration::from_secs(3), "sample {sample} 达到 3s");
     }
     assert_eq!(
         quota_failure_refresh_delay(Some(0)),
         Duration::from_secs(1),
         "零样本映射到下界，保持确定性"
+    );
+    // 跨度若误用「基准 − 下限」，该样本只会映射到 1.5s；
+    // 按 [1s, 3s) 全区间均匀映射应落在上半区间的 2.5s。
+    assert_eq!(
+        quota_failure_refresh_delay(Some(1_500_000_000)),
+        Duration::from_millis(2_500),
+        "样本 1_500_000_000 应映射到 2.5s"
+    );
+    // 固定样本集合需同时覆盖上下半区间，防止区间被静默收窄。
+    assert!(
+        delays
+            .iter()
+            .any(|(_, delay)| *delay < Duration::from_secs(2)),
+        "样本集合应覆盖区间下半段 [1s, 2s)"
+    );
+    assert!(
+        delays
+            .iter()
+            .any(|(_, delay)| *delay >= Duration::from_secs(2)),
+        "样本集合应覆盖区间上半段 [2s, 3s)"
     );
 }
 

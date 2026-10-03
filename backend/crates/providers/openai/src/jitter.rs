@@ -33,10 +33,12 @@ pub fn uniform_delay(sample: Option<u64>, max: Duration) -> Duration {
     Duration::from_nanos(nanos as u64)
 }
 
-/// 额度失败补查的基准延迟；实际延迟见 [`quota_failure_refresh_delay`]。
+/// 额度失败补查的基准延迟；随机源不可用时退回该固定值。
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
-/// 补查随机区间的下限；上限为基准的 +50%。
+/// 补查随机区间的下限（含）。
 const QUOTA_FAILURE_REFRESH_MIN_DELAY: Duration = Duration::from_secs(1);
+/// 补查随机区间的上限（不含），即基准的 +50%。
+const QUOTA_FAILURE_REFRESH_MAX_DELAY: Duration = Duration::from_secs(3);
 
 /// 额度拒绝后补查 usage 的随机延迟：基准 2s ±50%，即 `[1s, 3s)`。
 ///
@@ -46,10 +48,11 @@ const QUOTA_FAILURE_REFRESH_MIN_DELAY: Duration = Duration::from_secs(1);
 pub fn quota_failure_refresh_delay(sample: Option<u64>) -> Duration {
     match sample {
         Some(sample) => {
+            // 跨度是「上限 − 下限」而非「基准 − 下限」，否则区间上半段永远取不到。
             QUOTA_FAILURE_REFRESH_MIN_DELAY
                 + uniform_delay(
                     Some(sample),
-                    QUOTA_FAILURE_REFRESH_DELAY - QUOTA_FAILURE_REFRESH_MIN_DELAY,
+                    QUOTA_FAILURE_REFRESH_MAX_DELAY - QUOTA_FAILURE_REFRESH_MIN_DELAY,
                 )
         }
         None => QUOTA_FAILURE_REFRESH_DELAY,
