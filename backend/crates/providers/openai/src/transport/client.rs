@@ -46,61 +46,8 @@ const UPSTREAM_CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 pub(super) const UPSTREAM_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const X_CODEX_WS_STREAM_REQUEST_START_MS_CLIENT_METADATA_KEY: &str =
     "x-codex-ws-stream-request-start-ms";
-/// 显式开启「无账号代理的上游出口继承进程代理环境变量」的环境变量名。
-///
-/// 参考 `CODEX_CA_CERTIFICATE` 的环境变量模式：使用点读取、进程级缓存，并且参与
-/// HTTP 客户端缓存键。默认不继承是仓库文档化的出口不变量（多账号网关不能让
-/// 环境代理把全部直连账号静默归并到同一出口）；官方 codex 客户端默认尊重
-/// reqwest/tungstenite 的系统代理解析，本开关为环境代理强制网络的部署提供
-/// 与官方 TransportDefault 一致的显式出口。
-pub const UPSTREAM_ENV_PROXY_ENV: &str = "CODEX_UPSTREAM_ENV_PROXY";
-type ReqwestClientCacheKey = (Option<String>, String, Duration, bool);
+type ReqwestClientCacheKey = (Option<String>, String, Duration);
 type ReqwestClientCache = Mutex<HashMap<ReqwestClientCacheKey, Client>>;
-
-/// 解析 `CODEX_UPSTREAM_ENV_PROXY` 开关值：仅 `1`/`true`（忽略大小写与首尾空白）
-/// 视为开启，其余取值（含未设置、空串、`0`/`false`）一律关闭，保证默认行为确定。
-pub fn upstream_env_proxy_flag_enabled(value: Option<&str>) -> bool {
-    value.is_some_and(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true"))
-}
-
-/// 当前进程是否让无账号代理的上游出口继承进程代理环境变量。
-///
-/// 进程级缓存：环境变量在运行期视为常量（与 reqwest 在 Client 构建时读取系统代理
-/// 的时机一致）。首次解析输出一次可观测日志——环境代理被默认忽略或被显式继承
-/// 都属于出口层关键事实，且不得回显变量值（代理 URL 可能内嵌认证信息）。
-pub(super) fn upstream_env_proxy_inherited() -> bool {
-    static INHERITED: OnceLock<bool> = OnceLock::new();
-    *INHERITED.get_or_init(|| {
-        let enabled = upstream_env_proxy_flag_enabled(
-            std::env::var(UPSTREAM_ENV_PROXY_ENV).ok().as_deref(),
-        );
-        let env_proxy_present = [
-            "HTTP_PROXY",
-            "http_proxy",
-            "HTTPS_PROXY",
-            "https_proxy",
-            "ALL_PROXY",
-            "all_proxy",
-        ]
-        .iter()
-        .any(|key| {
-            std::env::var_os(key).is_some_and(|value| !value.is_empty())
-        });
-        if enabled {
-            tracing::info!(
-                env = UPSTREAM_ENV_PROXY_ENV,
-                "upstream egress for accounts without an explicit outbound proxy inherits process proxy environment variables"
-            );
-        } else if env_proxy_present {
-            tracing::warn!(
-                env = UPSTREAM_ENV_PROXY_ENV,
-                "process proxy environment variables are set but ignored by default for upstream egress; set {}=1 to inherit them, or bind a per-account outbound proxy",
-                UPSTREAM_ENV_PROXY_ENV
-            );
-        }
-        enabled
-    })
-}
 
 /// 构建复用连接池的 Codex HTTP 客户端。
 pub fn build_reqwest_client() -> Result<Client, CustomCaError> {
@@ -120,16 +67,10 @@ pub(super) fn build_account_http_client_with_timeout(
     timeout: Duration,
 ) -> Result<Client, CustomCaError> {
     super::tls::ensure_rustls_provider();
-    // 无账号代理且显式开启环境代理继承时，代理选择交回 reqwest 的系统代理解析
-    //（对齐官方 TransportDefault 默认）；其余情况一律 no_proxy，账号显式代理独占
-    // 出口，不与环境代理叠加。该维度影响构建结果，必须进入缓存键，避免不同策略
-    // 共用同一连接池。
-    let inherit_env_proxy = proxy.is_none() && upstream_env_proxy_inherited();
     let cache_key = (
         custom_ca_env_cache_key(),
         egress_key(account_id, proxy),
         timeout,
-        inherit_env_proxy,
     );
     static CLIENTS: OnceLock<ReqwestClientCache> = OnceLock::new();
     let cache = CLIENTS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -143,12 +84,10 @@ pub(super) fn build_account_http_client_with_timeout(
 
     // 连接池与 TCP、HTTP/2 保活沿用官方 Core 的 reqwest 默认值。
     let mut builder = Client::builder()
+        .no_proxy()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(timeout)
         .connector_layer(super::connection::ConnectionLayer);
-    if !inherit_env_proxy {
-        builder = builder.no_proxy();
-    }
     if let Some(proxy) = proxy {
         builder = builder.proxy(
             reqwest::Proxy::all(proxy.expose_url())

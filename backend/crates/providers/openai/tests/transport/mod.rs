@@ -53,7 +53,6 @@ mod connection;
 mod diagnostics;
 mod downstream;
 mod endpoints;
-mod env_proxy;
 mod headers;
 mod http_client;
 mod latency;
