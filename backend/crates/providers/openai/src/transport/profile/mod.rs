@@ -630,6 +630,20 @@ impl CodexDesktopReleaseService {
     ) -> Self {
         if let Some(verified) = verified.as_ref() {
             profile.update_bundled_release(verified);
+            // 缓存恢复与 CLI/平台渠道一样构成发布观察：只更新画像字段会让恢复版本
+            // 在首次检查发现新版时被跳过，滞后档位落回启动种子。这里补写进
+            // releases 历史，使「启动种子 → 恢复版本 → 新发现版本」形成完整序列。
+            profile.seed_client_release(
+                ClientKind::Desktop,
+                ClientPlatform::Macos,
+                "arm64",
+                ClientRelease {
+                    codex_version: verified.codex_version.clone(),
+                    desktop_version: Some(verified.desktop_version.clone()),
+                    desktop_build: Some(verified.desktop_build.clone()),
+                    verified_at: Some(verified.verified_at),
+                },
+            );
         }
         Self {
             transport,

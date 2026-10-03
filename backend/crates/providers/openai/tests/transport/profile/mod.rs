@@ -394,6 +394,67 @@ async fn lagged_profiles_track_observed_release_history() {
     );
 }
 
+/// 重启后恢复缓存、首次检查即发现新版：恢复版本必须进入发布历史，
+/// 滞后一档不能跳回启动种子（PR #339 审查反馈的触发序列）。
+#[tokio::test]
+async fn restored_cache_release_should_stay_in_version_lag_history() {
+    use provider_openai::transport::profile::selection::ClientProfileSelection;
+
+    let state = CodexWireProfileState::new(wire_profile());
+    let restored = CodexBundledReleaseProfile {
+        codex_version: "0.148.0-alpha.9".to_owned(),
+        desktop_version: "26.810.41047".to_owned(),
+        desktop_build: "6570".to_owned(),
+        verified_at: Utc
+            .with_ymd_and_hms(2026, 8, 20, 0, 0, 0)
+            .single()
+            .expect("valid fixture time"),
+    };
+    let transport = Arc::new(ReleaseTransport::new(
+        [Ok(release("26.820.41131", "6700"))],
+        [Ok("0.149.0".to_owned())],
+    ));
+    let service = service(
+        state.clone(),
+        transport,
+        Arc::new(ArtifactProfiles::default()),
+        Some(restored),
+    );
+    let selection = |lag: Option<u32>| ClientProfileSelection {
+        version_lag: lag,
+        ..Default::default()
+    };
+
+    // 恢复版本进入历史队首：最新档位取恢复后的画像，滞后一档解析到启动种子。
+    assert_eq!(
+        selection(None).resolve(&state).unwrap().codex_version,
+        "0.148.0-alpha.9"
+    );
+    assert_eq!(
+        selection(Some(1)).resolve(&state).unwrap().codex_version,
+        "0.147.0-alpha.6.6"
+    );
+
+    service.refresh().await.expect("first release refresh");
+
+    let latest = selection(None).resolve(&state).unwrap();
+    assert_eq!(latest.codex_version, "0.149.0");
+    assert_eq!(latest.desktop_version, "26.820.41131");
+    // 滞后一档是缓存恢复的版本 B，而不是启动种子 A。
+    let lagged = selection(Some(1)).resolve(&state).unwrap();
+    assert_eq!(lagged.codex_version, "0.148.0-alpha.9");
+    assert_eq!(lagged.desktop_version, "26.810.41047");
+    assert_eq!(
+        lagged.user_agent(),
+        "Codex Desktop/0.148.0-alpha.9 (Mac OS 15.7.1; arm64) unknown (Codex Desktop; 26.810.41047)"
+    );
+    // 滞后两档落到启动种子，恢复观察与启动种子共同构成启动历史。
+    assert_eq!(
+        selection(Some(2)).resolve(&state).unwrap().codex_version,
+        "0.147.0-alpha.6.6"
+    );
+}
+
 fn service(
     state: CodexWireProfileState,
     transport: Arc<ReleaseTransport>,
