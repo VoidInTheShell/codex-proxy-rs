@@ -240,8 +240,8 @@ async fn affinity_queue_full_and_timeout_preserve_binding_despite_free_fallback(
 }
 
 #[tokio::test]
-async fn affinity_queue_rechecks_terminal_credentials_before_switching_accounts() {
-    for terminal in [CredentialState::Expired, CredentialState::Banned] {
+async fn affinity_queue_rechecks_hard_unavailability_before_switching_accounts() {
+    for quota_exhausted in [false, true] {
         let store = Arc::new(MemoryAccountStore::default());
         create_account(&store, "acct_first", "test-first");
         create_account(&store, "acct_second", "test-second");
@@ -262,213 +262,14 @@ async fn affinity_queue_rechecks_terminal_credentials_before_switching_accounts(
         let mut pending = Box::pin(selector.select(&request));
         assert!(pending.as_mut().now_or_never().is_none());
         let account = store.get_account(&first).await.unwrap().unwrap();
-        persist_credential_state(&store, &account, terminal);
+        if quota_exhausted {
+            persist_quota_exhaustion(&store, &account, None);
+        } else {
+            persist_credential_state(&store, &account, CredentialState::Expired);
+        }
         let selected = pending.await.unwrap();
-        assert_eq!(
-            selected.account_id().as_str(),
-            "acct_second",
-            "{terminal:?}"
-        );
-        assert!(selected.account_switch(), "{terminal:?}");
-    }
-}
-
-#[tokio::test]
-async fn affinity_queue_waits_for_the_original_account_to_recover_from_quota_exhaustion() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_first", "test-first");
-    create_account(&store, "acct_second", "test-second");
-    let first = ProviderAccountId::new("acct_first").unwrap();
-    let account = store.get_account(&first).await.unwrap().unwrap();
-    persist_quota_exhaustion(
-        &store,
-        &account,
-        Some(SystemTime::now() + Duration::from_secs(3600)),
-    );
-    let leases = Arc::new(TestLeaseCoordinator::default());
-    let affinity = Arc::new(MemorySessionAffinity::default());
-    let key = bind_first(&affinity).await;
-    let selector = selector_with_affinity(&store, leases.clone(), Arc::clone(&affinity));
-    let request_attempt = queued_attempt(Duration::from_secs(2));
-    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
-    let request = SelectCodexCredential {
-        upstream_model: "gpt-5.4",
-        request_url: &url,
-        attempt: &request_attempt,
-        session_affinity_key: Some(&key),
-    };
-    let mut pending = Box::pin(selector.select(&request));
-    assert!(
-        pending.as_mut().now_or_never().is_none(),
-        "quota exhaustion must not switch the bound account mid-session"
-    );
-    let recovered = store.get_account(&first).await.unwrap().unwrap();
-    block_on(store.apply_quota_access(QuotaAccessChange {
-        account_id: first.clone(),
-        expected_revision: recovered.revision(),
-        state: QuotaState::allowed(SystemTime::now()),
-    }))
-    .expect("authoritative quota recovery");
-    let selected = pending.await.unwrap();
-    assert_eq!(selected.account_id(), &first);
-    assert!(selected.affinity_hit());
-    assert_eq!(selected.escape_reason(), None);
-    assert!(!selected.account_switch());
-    assert!(
-        leases
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.account_id() == &first),
-        "the free fallback account must never be leased"
-    );
-}
-
-#[tokio::test]
-async fn affinity_recovery_wait_times_out_without_switching_accounts() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_first", "test-first");
-    create_account(&store, "acct_second", "test-second");
-    let first = ProviderAccountId::new("acct_first").unwrap();
-    let leases = Arc::new(TestLeaseCoordinator::default());
-    leases.busy_accounts.lock().unwrap().insert(first.clone());
-    let affinity = Arc::new(MemorySessionAffinity::default());
-    let key = bind_first(&affinity).await;
-    let selector = selector_with_affinity(&store, leases.clone(), Arc::clone(&affinity));
-    let request_attempt = queued_attempt(Duration::from_millis(200));
-    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
-    let request = SelectCodexCredential {
-        upstream_model: "gpt-5.4",
-        request_url: &url,
-        attempt: &request_attempt,
-        session_affinity_key: Some(&key),
-    };
-    let mut pending = Box::pin(selector.select(&request));
-    assert!(pending.as_mut().now_or_never().is_none());
-    let account = store.get_account(&first).await.unwrap().unwrap();
-    persist_quota_exhaustion(
-        &store,
-        &account,
-        Some(SystemTime::now() + Duration::from_secs(3600)),
-    );
-    assert!(
-        pending.as_mut().now_or_never().is_none(),
-        "mid-wait quota exhaustion must not switch accounts either"
-    );
-    leases.busy_accounts.lock().unwrap().clear();
-    let error = pending.await.unwrap_err();
-    assert!(matches!(
-        error,
-        CredentialSelectionError::QueueRejected(QueueRejection::Timeout)
-    ));
-    assert_eq!(
-        affinity
-            .load(&ProviderKind::new("openai").unwrap(), &key)
-            .await
-            .unwrap(),
-        Some(first.clone()),
-        "timeout must not migrate the binding"
-    );
-    assert!(
-        leases
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.account_id() == &first),
-        "the free fallback account must never be leased"
-    );
-}
-
-#[tokio::test]
-async fn affinity_queue_waits_for_the_original_account_rate_limit_cooldown_to_expire() {
-    let store = Arc::new(MemoryAccountStore::default());
-    create_account(&store, "acct_first", "test-first");
-    create_account(&store, "acct_second", "test-second");
-    let first = ProviderAccountId::new("acct_first").unwrap();
-    let leases = Arc::new(TestLeaseCoordinator::default());
-    let affinity = Arc::new(MemorySessionAffinity::default());
-    let key = bind_first(&affinity).await;
-    let cooldowns = Arc::new(MemoryCooldownPort::new());
-    let selector = selector_with_runtime(
-        &store,
-        leases.clone(),
-        Arc::clone(&affinity),
-        Arc::new(AccountFeedbackStats::default()),
-        Arc::clone(&cooldowns) as Arc<dyn ProviderCooldownPort>,
-    );
-    let bound = store.get_account(&first).await.unwrap().unwrap();
-    selector
-        .record_failure(
-            &bound,
-            CodexAccountFailure::RateLimited {
-                retry_after: Some(Duration::from_millis(300)),
-            },
-            None,
-        )
-        .await
-        .expect("record 429 cooldown");
-    let request_attempt = queued_attempt(Duration::from_secs(2));
-    let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
-    let request = SelectCodexCredential {
-        upstream_model: "gpt-5.4",
-        request_url: &url,
-        attempt: &request_attempt,
-        session_affinity_key: Some(&key),
-    };
-    let mut pending = Box::pin(selector.select(&request));
-    assert!(
-        pending.as_mut().now_or_never().is_none(),
-        "an active 429 cooldown must not switch the bound account mid-session"
-    );
-    let selected = pending.await.unwrap();
-    assert_eq!(selected.account_id(), &first);
-    assert!(selected.affinity_hit());
-    assert_eq!(selected.escape_reason(), None);
-    assert!(!selected.account_switch());
-    assert!(
-        leases
-            .requests
-            .lock()
-            .unwrap()
-            .iter()
-            .all(|request| request.account_id() == &first),
-        "the free fallback account must never be leased"
-    );
-}
-
-#[tokio::test]
-async fn affinity_escape_stays_available_for_terminal_bound_accounts_with_queueing() {
-    for terminal in [CredentialState::Banned, CredentialState::Invalid] {
-        let store = Arc::new(MemoryAccountStore::default());
-        create_account(&store, "acct_first", "test-first");
-        create_account(&store, "acct_second", "test-second");
-        let first = ProviderAccountId::new("acct_first").unwrap();
-        let account = store.get_account(&first).await.unwrap().unwrap();
-        persist_credential_state(&store, &account, terminal);
-        let affinity = Arc::new(MemorySessionAffinity::default());
-        let key = bind_first(&affinity).await;
-        let selector = selector_with_affinity(
-            &store,
-            Arc::new(TestLeaseCoordinator::default()),
-            Arc::clone(&affinity),
-        );
-        let request_attempt = queued_attempt(Duration::from_secs(2));
-        let url = Url::parse(OFFICIAL_CODEX_BASE_URL).unwrap();
-        let request = SelectCodexCredential {
-            upstream_model: "gpt-5.4",
-            request_url: &url,
-            attempt: &request_attempt,
-            session_affinity_key: Some(&key),
-        };
-        let selected = selector.select(&request).await.unwrap();
-        assert_eq!(
-            selected.account_id().as_str(),
-            "acct_second",
-            "{terminal:?}"
-        );
-        assert!(selected.account_switch(), "{terminal:?}");
+        assert_eq!(selected.account_id().as_str(), "acct_second");
+        assert!(selected.account_switch());
     }
 }
 

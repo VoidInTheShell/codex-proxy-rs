@@ -135,7 +135,6 @@ enum SessionAffinityLookup {
     Unavailable,
 }
 
-/// 绑定账号当前不可用的具体原因；仅用于日志遥测与队列关闭时的逃逸归类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AffinityEscapeReason {
     HardUnavailable,
@@ -168,10 +167,6 @@ struct AffinitySelection {
     bound_account: Option<ProviderAccountId>,
     preferred_account: Option<ProviderAccountId>,
     escape_reason: Option<AffinityEscapeReason>,
-    /// 绑定账号凭据事实健康、仅处于可恢复的临时不可用（配额耗尽、上游冷却、
-    /// 访问令牌等待刷新）。此时保留偏好等待原账号恢复，不构成逃逸；只在账号
-    /// 排队关闭等无法等待的场景才退化为携带该原因的逃逸。
-    recovery_wait: Option<AffinityEscapeReason>,
     inherited: bool,
 }
 
@@ -181,18 +176,6 @@ impl AffinitySelection {
             bound_account: Some(account_id.clone()),
             preferred_account: Some(account_id),
             escape_reason: None,
-            recovery_wait: None,
-            inherited: false,
-        }
-    }
-
-    /// 绑定账号可恢复不可用：保留 preferred 让选号继续偏向它，等待机制负责排队。
-    fn recovering(account_id: ProviderAccountId, reason: AffinityEscapeReason) -> Self {
-        Self {
-            bound_account: Some(account_id.clone()),
-            preferred_account: Some(account_id),
-            escape_reason: None,
-            recovery_wait: Some(reason),
             inherited: false,
         }
     }
@@ -202,7 +185,6 @@ impl AffinitySelection {
             bound_account: Some(account_id),
             preferred_account: None,
             escape_reason: Some(reason),
-            recovery_wait: None,
             inherited: false,
         }
     }
@@ -219,7 +201,6 @@ impl AffinitySelection {
         if self.bound_account.is_some() && self.escape_reason.is_none() {
             self.escape_reason = Some(reason);
             self.preferred_account = None;
-            self.recovery_wait = None;
         }
     }
 
@@ -247,12 +228,7 @@ impl AffinitySelection {
                 | AccountSchedulingBlocker::OutsideClientScope,
             )
             | PreferredAccountSelection::Missing => {
-                // 排队关闭时可恢复不可用才会走到这里：保留配额/冷却等具体原因，
-                // 避免把已知的临时状态误报成 hard_unavailable。
-                let reason = self
-                    .recovery_wait
-                    .unwrap_or(AffinityEscapeReason::HardUnavailable);
-                self.escape(reason);
+                self.escape(AffinityEscapeReason::HardUnavailable);
             }
             PreferredAccountSelection::NotRequested => {
                 self.escape(AffinityEscapeReason::SelectionInvariant);
@@ -654,24 +630,6 @@ impl CodexCredentialSelector {
                 };
                 let mut wait_candidates =
                     AccountSelector.wait_candidates(&candidates, &wait_context);
-                // 会话亲和的可恢复不可用（配额耗尽、上游冷却、访问令牌待刷新）也只等
-                // 原账号：同一 session 中途换号是服务端可见的账号池轮换强信号，宁可
-                // 排队超时也不逃逸。只对亲和绑定生效：required/continuation 钉选的
-                // 额度状态必须立即透出给 coordinator，子线程首绑前的继承偏好只是提示。
-                let affinity_recovery_wait = pinned_account.is_none()
-                    && !diagnostic
-                    && !affinity.inherited
-                    && queue_policy.max_waiting > 0
-                    && affinity.recovery_wait.is_some();
-                if affinity_recovery_wait
-                    && let Some(bound) = affinity.preferred_account()
-                    // attempt 排除集（coordinator 换号重放）与 cyber-policy 排除优先于
-                    // 亲和等待：被排除的账号不属于本任务要钉住的会话范围。
-                    && !base_excluded.contains(bound)
-                    && !wait_candidates.contains(bound)
-                {
-                    wait_candidates.push(bound.clone());
-                }
                 let preferred_wait = preferred.as_ref().filter(|account_id| {
                     !diagnostic
                         && queue_policy.max_waiting > 0
@@ -705,8 +663,6 @@ impl CodexCredentialSelector {
                     }
                 };
                 // 可等待集合使用原始排除集；这里的 Excluded 只可能来自本轮租约争用或队列让位。
-                // LocalAvailability 同样丢弃：绑定账号处于可恢复不可用（或选号与早判之间
-                // 刚好过期）时，不能改选其它账号，排队分支负责等待原账号恢复。
                 let selection = selection.filter(|selection| {
                     preferred_wait.is_none()
                         || selection.is_policy_choice()
@@ -716,7 +672,6 @@ impl CodexCredentialSelector {
                                 AccountSchedulingBlocker::ConcurrencyLimit
                                     | AccountSchedulingBlocker::RequestInterval
                                     | AccountSchedulingBlocker::Excluded
-                                    | AccountSchedulingBlocker::LocalAvailability
                             )
                         )
                 });
@@ -771,29 +726,6 @@ impl CodexCredentialSelector {
                         Err(CredentialSelectionError::NoEligibleCredential)
                     };
                 };
-                // 健康的亲和绑定不因权重回切换号：smart prefer_higher_weight 只影响
-                // 未绑定请求的初始路由，已绑定会话留在原账号，避免同一 session 的
-                // account-id 突变。排除其它候选后重跑本轮选号，收敛到绑定账号；
-                // 插件显式选号（policy choice）不受此钉住约束。
-                if !selection.is_policy_choice()
-                    && matches!(
-                        selection.preferred(),
-                        PreferredAccountSelection::Blocked(AccountSchedulingBlocker::LowerWeight)
-                    )
-                    && pinned_account.is_none()
-                    && !diagnostic
-                    && !affinity.inherited
-                    && queue_policy.max_waiting > 0
-                    && affinity.recovery_wait.is_none()
-                    && let Some(bound) = affinity.preferred_account()
-                {
-                    for candidate in &candidates {
-                        if candidate.account.id() != bound {
-                            excluded.insert(candidate.account.id().clone());
-                        }
-                    }
-                    continue;
-                }
                 affinity.observe_preferred_selection(selection.preferred());
                 let selected = selection.candidate();
                 let account = candidates
@@ -1515,39 +1447,34 @@ fn affinity_selection_for_bound_account(
     else {
         return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
     };
-    // 终态只看持久凭据事实：停用或凭据死亡（expired/banned/invalid/unknown）必须
-    // 逃逸，否则会话会被死账号锁死。凭据 Ready 的账号只可能因额度、上游冷却或
-    // 访问令牌待刷新而临时不可用，这些都有恢复路径，保留偏好等待恢复而非换号。
-    if !candidate.account.enabled()
-        || candidate.account.credential_state() != CredentialState::Ready
-    {
-        return AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable);
-    }
     match candidate
         .account
         .status_projection(now, candidate.signals.cooldown)
         .status
     {
         AccountStatus::Normal => AffinitySelection::preferred(account_id),
-        AccountStatus::QuotaExhausted => {
-            AffinitySelection::recovering(account_id, AffinityEscapeReason::QuotaExhausted)
+        AccountStatus::QuotaExhausted
+        | AccountStatus::RateLimited
+        | AccountStatus::Disabled
+        | AccountStatus::Error => {
+            AffinitySelection::escaped(account_id, affinity_unavailable_reason(candidate, now))
         }
-        AccountStatus::RateLimited => {
-            AffinitySelection::recovering(account_id, AffinityEscapeReason::Cooldown)
-        }
-        AccountStatus::Disabled => {
-            AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable)
-        }
-        AccountStatus::Error => {
-            // 凭据 Ready 却投影为 Error 只剩访问令牌已过期的窗口：有 refresh token
-            // 时刷新 worker 会恢复它（P1-4 终态刷新失败会转 Expired，下一轮重查
-            // 逃逸）；没有 refresh token 就没有恢复路径，维持立即逃逸。
-            if candidate.account.has_refresh_token() {
-                AffinitySelection::recovering(account_id, AffinityEscapeReason::HardUnavailable)
-            } else {
-                AffinitySelection::escaped(account_id, AffinityEscapeReason::HardUnavailable)
-            }
-        }
+    }
+}
+
+fn affinity_unavailable_reason(
+    candidate: &AccountCandidate,
+    now: SystemTime,
+) -> AffinityEscapeReason {
+    match candidate
+        .account
+        .status_projection(now, candidate.signals.cooldown)
+        .status
+    {
+        AccountStatus::QuotaExhausted => AffinityEscapeReason::QuotaExhausted,
+        AccountStatus::RateLimited => AffinityEscapeReason::Cooldown,
+        AccountStatus::Normal => AffinityEscapeReason::SelectionInvariant,
+        AccountStatus::Disabled | AccountStatus::Error => AffinityEscapeReason::HardUnavailable,
     }
 }
 
