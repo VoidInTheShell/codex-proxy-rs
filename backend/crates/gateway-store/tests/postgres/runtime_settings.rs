@@ -182,12 +182,17 @@ async fn migrations_should_narrow_the_default_refresh_margin_to_the_codex_baseli
         .await
         .expect("load settings");
     assert_eq!(settings.refresh_margin_seconds, 300);
-    // 列默认值同步收窄，重建行不会回退到旧值。
-    let column_default: String =
-        sqlx::query_scalar("select column_default from information_schema.columns where table_name = 'runtime_settings' and column_name = 'refresh_margin_seconds'")
-            .fetch_one(&database.pool)
-            .await
-            .expect("read column default");
+    // 列默认值同步收窄，重建行不会回退到旧值；目录查询限定本测试 schema，
+    // 同库并行测试里停留在旧迁移版本的 schema 仍保留 3600 旧默认，不能被读到。
+    let column_default: String = sqlx::query_scalar(
+        "select column_default from information_schema.columns \
+             where table_schema = current_schema() \
+               and table_name = 'runtime_settings' \
+               and column_name = 'refresh_margin_seconds'",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .expect("read column default");
     assert_eq!(column_default, "300");
     database.close().await;
 }
