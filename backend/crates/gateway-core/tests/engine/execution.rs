@@ -1,3 +1,5 @@
+//! 执行服务的准入、预算、请求记录与终结行为测试
+
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -720,7 +722,7 @@ fn detached_early_failure_resumes_cancelled_store_write_and_settles_once_for_all
                     store.finalizes.load(Ordering::SeqCst),
                     usize::from(!suspend_create)
                 );
-                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号。
+                // receiver 已从 Store 替身取走；只有延续原 future 才能继续接收此信号
                 complete_write
                     .send(())
                     .expect("detached cleanup retains the original store write");
@@ -2831,7 +2833,7 @@ fn settlement_failure_keeps_provider_error_and_releases_concurrency_once() {
             ));
             assert!(started.session.is_finalized());
             started.session.detach_finalize().await;
-            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算。
+            // Store 端口已接管精确费用后，结算错误不能改写 Provider 错误或触发第二次结算
             assert_cleanup_completed(&admissions, &budget, &started.request_id);
         }
     });

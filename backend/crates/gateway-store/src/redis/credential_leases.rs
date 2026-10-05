@@ -1,4 +1,4 @@
-//! Provider、账号与 OAuth refresh 的 Redis lease/fencing。
+//! Provider、账号与 OAuth refresh 的 Redis lease/fencing
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -162,7 +162,7 @@ impl CredentialLeaseRequest {
     }
 }
 
-/// 对任意明确资源施加并发数和启动间隔约束的计数 lease。
+/// 对任意明确资源施加并发数和启动间隔约束的计数 lease
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialBoundedLeaseRequest {
     pub scope: CredentialLeaseScope,
@@ -202,7 +202,7 @@ pub struct CredentialLeaseGrant {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Redis 可丢失的账号调度信号。
+/// Redis 可丢失的账号调度信号
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CredentialRuntimeSignal {
     pub resource_id: String,
@@ -227,7 +227,7 @@ impl fmt::Debug for CredentialBoundedLeaseAcquisition {
     }
 }
 
-/// Drop 时在当前 Tokio runtime 上尽力释放；进程崩溃由 Redis TTL 回收。
+/// Drop 时在当前 Tokio runtime 上尽力释放；进程崩溃由 Redis TTL 回收
 pub struct CredentialLeaseGuard {
     repository: RedisCredentialLeaseRepository,
     request: CredentialLeaseRequest,
@@ -235,7 +235,7 @@ pub struct CredentialLeaseGuard {
 }
 
 impl CredentialLeaseGuard {
-    /// 自动续期仅属于返回 guard；丢失租约会取消依赖该槽位的请求。
+    /// 自动续期仅属于返回 guard；丢失租约会取消依赖该槽位的请求
     pub fn maintain(
         self,
         deadline: gateway_core::lifecycle::Deadline,
@@ -285,7 +285,7 @@ impl CredentialLeaseGuard {
 }
 
 struct RenewingSchedulingLease {
-    // 先停止续期再释放 Redis 成员，防止释放与续期交错。
+    // 先停止续期再释放 Redis 成员，防止释放与续期交错
     _renewal: crate::lease_renewal::LeaseRenewal,
     _guard: CredentialLeaseGuard,
 }
@@ -357,7 +357,7 @@ impl RedisCredentialLeaseRepository {
         })
     }
 
-    /// 获取带 Drop 释放语义的通用 lease guard，供 Provider refresh/task 组合器使用。
+    /// 获取带 Drop 释放语义的通用 lease guard，供 Provider refresh/task 组合器使用
     pub async fn try_acquire_guard(
         &self,
         request: CredentialLeaseRequest,
@@ -370,7 +370,7 @@ impl RedisCredentialLeaseRepository {
         }))
     }
 
-    /// 原子推进跨进程共享、按 Client Key 与 Provider 隔离的调度游标。
+    /// 原子推进跨进程共享、按 Client Key 与 Provider 隔离的调度游标
     pub async fn advance_scheduling_cursor(
         &self,
         client_api_key_id: &ClientApiKeyId,
@@ -502,7 +502,7 @@ impl RedisCredentialLeaseRepository {
     }
 }
 
-/// Store-owned 的通用 Provider lease 能力；具体 Provider 不感知 Redis。
+/// Store-owned 的通用 Provider lease 能力；具体 Provider 不感知 Redis
 pub(crate) struct RedisProviderLeaseCoordinator {
     repository: RedisCredentialLeaseRepository,
     process_id: String,

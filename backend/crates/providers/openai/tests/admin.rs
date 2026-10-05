@@ -1,3 +1,5 @@
+//! 验证 OpenAI 管理能力、请求画像、Bundle 组装与额度投影
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -559,7 +561,7 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
 
     assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("review"));
-    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值。
+    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值
     assert_eq!(observation.reasoning_preset, None);
     assert!(observation.compact);
 }
@@ -1359,7 +1361,7 @@ async fn openai_admin_preserves_expired_window_usage_and_exhaustion_attribution(
             .await
             .expect("project quota");
         assert_eq!(projected.limit_reached, exhausted);
-        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口。
+        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口
         projected.apply_limit_reached_display();
         let primary = projected
             .windows
@@ -2386,7 +2388,7 @@ mod errors {
             .prepare_refresh(command())
             .await
             .unwrap_err();
-        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
+        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),

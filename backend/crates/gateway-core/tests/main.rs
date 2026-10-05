@@ -1,3 +1,5 @@
+//! 核心领域、执行引擎与运行时模块的测试入口
+
 mod account;
 mod concurrency;
 mod diagnostics;

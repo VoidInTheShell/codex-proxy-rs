@@ -1,3 +1,5 @@
+//! 检查 API 层依赖、源码与测试模块边界，以及管理路由约定
+
 use std::{fs, path::Path};
 
 #[test]

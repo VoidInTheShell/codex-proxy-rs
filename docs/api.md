@@ -171,10 +171,10 @@ Codex PAT 验证服务不可用和身份响应无效分别返回 `50301`、`5020
 
 ### 管理写入一致性
 
-管理写入不要求客户端提供全局配置版本。会改变路由快照或安全配置的写入由后端在事务内推进
-内部 `config_revision`，并用于快照发布与审计。账号更新和分组查询/写入的部分响应会返回
-`configRevision` 作为已提交事实，但它不是客户端 mutation 的前置条件。
-个别资源另有自己的并发检查，如代理的 `revision` 和插件实例的 `expectedRevision`；按对应接口提交，不与全局版本混用
+会改变路由快照或安全配置的写入由后端在事务内推进 `config_revision`，用于快照发布与审计。
+账号、分组等响应中的 `configRevision` 表示已提交事实，不是这些接口的写入前置条件。
+[运行设置整体更新](#8-运行设置)必须提交读取时的 `configRevision`，过期返回 `409`；
+代理的 `revision`、插件实例的 `expectedRevision` 属于各自资源，按对应接口提交，不与全局版本混用
 
 ## 2. 健康检查
 
@@ -205,10 +205,10 @@ WebSocket message 和 frame 不设置网关私有长度上限；协议可接受�
 这两类 `/v1/providers/*` 路由使用同一 Client Key 鉴权、账号组范围、Provider 账号资格、租约、
 并发/频率准入、请求记录和发送事实。`provider`、`model` 与 `endpoint` 都是已发布目录中的稳定 ID；
 宿主不会接受客户端提供的上游 URL，也不会把下游 Authorization、Cookie、API Key、Host、转发头或
-`Connection` 声明的逐跳头交给插件。上游账号认证只来自宿主选中的账号
+`Connection` 声明的逐跳头交给目标 Provider。原生执行的上游账号认证来自宿主选中的账号
 
 `POST /v1/providers/{provider}/models/{model}/count_tokens` 接受最多 8 MiB 的合法 JSON，且只路由到
-为该模型明确声明 `count_tokens` 的 Provider。Core 不解释或重写请求/响应 JSON，响应必须是插件按其
+为该模型明确声明 `count_tokens` 的 Provider。Core 不解释或重写请求/响应 JSON，响应必须是目标 Provider 按其
 声明的本地精确 tokenizer 或上游精确计数合同返回的原始 JSON；没有准确实现时返回不支持，不从 usage
 或字符数推算。响应固定使用 `application/json` 并重算 `Content-Length`
 
@@ -224,6 +224,15 @@ Codex 的 review 等子代理请求仍使用 `/v1/responses`，并通过 `x-open
 网关不提供独立的子代理请求路径
 
 ### Responses 请求与传输
+
+#### 请求期限
+
+模型请求默认不限制总执行时长。排队受[并发等待设置](#8-运行设置)约束，上游传输仍有独立的连接、空闲与心跳超时；
+持续有输出的请求不会仅因总时长达到固定值而结束。插件可以对单次模型执行设置显式总时限，
+从该次请求开始计算，见 [SDK 请求设置](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
+
+`api.request_timeout_seconds` 控制 HTTP 路由处理到返回响应的等待，默认 `null`；不限制已返回响应的流式正文寿命，
+也不是 WebSocket 每轮模型执行的总时限。客户端断开或取消仍会结束所属执行，反向代理和客户端可另设超时
 
 #### 请求解压
 
@@ -248,7 +257,9 @@ API Key 与 OAuth 共用模拟客户端画像（`User-Agent`、`originator`、`v
 上游认证只来自选中的账号；API Key 不携带 OAuth Cookie、ChatGPT 账号身份或下游的
 `X-OpenAI-Actor-Authorization` 托管认证声明。
 下游的 `x-openai-account-routing-override`、`x-openai-fedramp` 也不透传，
-工作区路由与合规属性不能从原账号继承；请求中间件不能重新注入这些托管身份头
+工作区路由与合规属性不能从原账号继承。
+上述过滤描述原生转发；已信任插件的显式 header 改写可以覆盖账号与画像生成的默认头，
+不按认证或会话字段名称拦截，边界见 [SDK 请求中间件](../backend/crates/gateway-plugin/sdk/docs/capabilities.md#模型请求与-attempt)
 
 Responses 也不透传 `x-stainless-*`、`Origin`、`Referer`、`sec-ch-ua*` 和 `sec-fetch-*`
 携带的下游 SDK/浏览器环境或页面来源。过滤规则适用于所有下游客户端，与 User-Agent 无关；
@@ -1023,7 +1034,7 @@ revision 变化时丢弃结果
 ### 主动额度重置卡
 
 `GET /api/admin/accounts/reset-credits?accountId=...` 每次都查询对应 Provider；后端不把卡片列表写入
-PostgreSQL 或 Redis。OpenAI OAuth 与声明该能力的插件可使用，账号视图分别以 `resetCredits` 和
+PostgreSQL 或 Redis。当前由 OpenAI Provider 为 OAuth 账号提供，账号视图分别以 `resetCredits` 和
 `consumeResetCredit` 表示查询和消费能力
 
 查询响应：
@@ -1061,8 +1072,7 @@ PostgreSQL 或 Redis。OpenAI OAuth 与声明该能力的插件可使用，账�
 `POST /api/admin/accounts/quota/refresh` 回读上游额度；未提供 `quotaRefresh` 能力时不发起该查询。
 不得因为消费成功直接改写本地 `resetAt` 或解除冻结。xAI 不支持该能力
 
-插件的已确认拒绝与凭据需刷新是完整业务结果；消费调用超时、进程退出、协议损坏或结果无法通过校验时，
-按结果未知处理。消费期间账号身份或凭据版本变化也返回结果未知，不将旧结果套用到新绑定账号
+消费期间账号身份或凭据版本变化时返回结果未知，不将旧结果套用到新绑定账号
 
 ## 6. 账号分组
 
@@ -1263,7 +1273,7 @@ accountWarmupModel
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
 该对象最多容纳 5 个执行请求与 5 个等待请求。Key 并发为 0（不限）时跳过 Key 排队。
 `concurrencyWaitTimeoutSeconds` 取值 1～120，默认 30，从首次入队开始计时，密钥与账号两层共享该等待时限；
-切换账号或内部重试不重新计时，等待同时计入请求总超时。该时限不用于中断已开始的上游生成。
+切换账号或内部重试不重新计时；若插件设置了请求总时限，等待也计入该时限。排队超时不用于中断已开始的上游生成。
 设置更新请求须包含这三个字段，新请求使用更新后的快照
 
 `openaiGuardianReservedConcurrency`（默认 0，取值 0～4,294,967,295）为 Codex Guardian 自动审批保留账号并发，保存后对新请求生效。

@@ -1,4 +1,4 @@
-//! OpenAI attempt 的选择、发送与响应流执行。
+//! OpenAI attempt 的选择、发送与响应流执行
 
 use gateway_core::metering::{CalculatedCost, Usage};
 
@@ -207,7 +207,7 @@ impl CodexProvider {
             lease.capacity_snapshot(),
         ));
         // Standalone Provider 端点没有可证明的账号 owner；Search metadata 必须按
-        // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity。
+        // 跨账号输入收敛到当前 lease，不能沿用下游声明的账号或 installation identity
         let turn_metadata = request.turn_metadata.as_deref().and_then(|metadata| {
             crate::transport::request::scope_turn_metadata(metadata, lease.installation_id(), true)
         });
@@ -544,7 +544,7 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
         };
 
         if allows_account_state_mutation && let Some(key) = request.session_affinity_key.as_ref() {
-            // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新。
+            // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新
             request.selector.update_session_affinity(
                 key,
                 request.lease.affinity_expected_account_id(),
@@ -616,7 +616,7 @@ fn image_response_metering(
     body: &[u8],
     prices: &gateway_core::metering::PricingOverrides,
 ) -> Option<(Usage, Option<CalculatedCost>)> {
-    // 只保留 usage，跳过通常很大的 base64 图片；原始响应仍按字节透传。
+    // 只保留 usage，跳过通常很大的 base64 图片；原始响应仍按字节透传
     #[derive(Deserialize)]
     struct ImageUsageEnvelope {
         usage: Option<Value>,
@@ -637,7 +637,7 @@ fn image_response_metering(
     usage.image_output_tokens = raw
         .pointer("/output_tokens_details/image_tokens")
         .and_then(Value::as_u64);
-    // 总量是上游独立报告的事实；图片明细是总输入/输出的子集，不能再次相加。
+    // 总量是上游独立报告的事实；图片明细是总输入/输出的子集，不能再次相加
     usage.total_tokens = raw.get("total_tokens").and_then(Value::as_u64);
     let cost = crate::transport::usage::image_calculated_cost(request_body, &raw, prices);
     (usage != Usage::default()).then_some((usage, cost))
@@ -818,7 +818,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let mut body = response.body;
         let mut failure_diagnostics = response.diagnostics.clone();
         if response_transport == CodexBackendTransport::WebSocket {
-            // opening ID 标识连接，不可作为缺失请求级错误头时的当前请求 ID。
+            // opening ID 标识连接，不可作为缺失请求级错误头时的当前请求 ID
             failure_diagnostics.request_id = None;
         }
         let failure_set_cookie_headers = response.set_cookie_headers.clone();
@@ -828,9 +828,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         let rate_limit_updates = response.rate_limit_updates;
         let response_metadata_updates = response.response_metadata_updates;
         // OpenAI 线路为透明代理：HTTP SSE 与 WebSocket 两条上游均启用 raw 透传，
-        // 下游按字节转发上游原文，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）。
+        // 下游按字节转发上游原文，避免 serde 往返改写数值/精度（大整数→f64、logprobs 等）
         // WS 帧由 reducer 以 encode_sse_event(&event, raw) 逐字节内嵌上游原始 JSON
-        // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文。
+        // （transport/protocol/websocket.rs），push_frames 抽出的 data 即上游原文
         let mut decoder = CodexCanonicalDecoder::new(upstream_model.as_str())
             .with_pricing(context.pricing().get("openai").and_then(|models| models.get(upstream_model.as_str())).cloned())
             .with_reported_model(response.response_metadata.effective_model.as_deref())
@@ -1038,7 +1038,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
                 // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
-                // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定。
+                // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定
                 selector
                     .record_success(
                         &active_account,
@@ -1169,7 +1169,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             session_transport_recovery.websocket_succeeded(key);
         }
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
-            // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield。
+            // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield
             selector
                 .record_success(
                     &active_account,

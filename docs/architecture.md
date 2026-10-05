@@ -6,7 +6,7 @@
 
 | 阅读目标 | 章节 |
 | --- | --- |
-| 了解模块与插件边界 | [运行拓扑](#2-运行拓扑)、[Workspace](#3-workspace-边界)、[插件扩展](#31-插件扩展) |
+| 了解模块与插件边界 | [运行拓扑](#2-运行拓扑)、[Workspace](#3-workspace-边界)、[插件扩展](#31-插件扩展)、[前端职责](#34-前端模块职责) |
 | 跟踪一次请求 | [请求生命周期](#4-数据面请求生命周期)、[协议边界](#5-provider-与协议边界)、[路由与结算](#6-路由账号范围与-continuation) |
 | 修改配置与持久化 | [控制面](#7-控制面与-revision)、[状态所有权](#8-状态所有权) |
 | 维护运行行为 | [凭据与额度](#9-credential额度与主动重置)、[观测与任务](#10-观测与后台任务)、[生命周期](#11-生命周期安全与恢复) |
@@ -205,7 +205,8 @@ flowchart LR
 管理页面使用无同源权限的 sandbox iframe，通过固定目标的宿主桥访问已声明路由；
 UI、Vue 与样式随插件打包，不读取宿主内部模块。
 官方插件身份仅来自受信宿主发行物内的封口清单，普通安装不能指定 `builtin`；封口标记不是密码学签名。
-宿主更新与回滚必须通过已启用插件的兼容检查，不能自动接受制品或停用实例来绕过检查
+宿主重启到已安装版本前检查启用插件，不兼容时必须由管理员确认停用；回滚要求启用插件与目标宿主兼容。
+这些流程不能自动接受制品，确认与文件交换边界见[在线更新与回滚](#在线更新与回滚)
 
 安装到使用见 [插件使用](plugins.md)，清单与能力合同见 [SDK](../backend/crates/gateway-plugin/sdk/README.md)，
 HTTP 字段见 [插件 API](api.md#12-插件管理)，更新与数据恢复见 [部署说明](../deploy/README.md#插件兼容与发行目录)
@@ -285,6 +286,31 @@ WS 路由提示属于握手，连接复用时不重发；档位变化不重建�
 独占发送、提交、重试和终结顺序。Provider 上报费用优先于本地估算，丢弃的 attempt 不得污染最终计量。
 Provider 本地估算按当前 attempt 实际发送的上游模型查价，响应声明的模型只作观测；费用明细复用同一口径。
 Client Key 费用账本独立累计各次 attempt 的实际费用，不能因请求重试而清空已产生的费用或未知计费状态
+
+### 3.4 前端模块职责
+
+`frontend/src` 持有应用状态和业务交互，基础组件与主题算法由 `@codex-proxy/ui` 提供：
+
+| 入口 | 职责 |
+| --- | --- |
+| `api/modules/`、`api/request.ts` | HTTP 合同、统一请求与错误处理；业务页面不重复解释响应信封 |
+| `stores/modules/`、`router/`、`plugins/` | 应用级登录与界面状态、路由和初始化；服务端数据的权威仍在后端 |
+| `views/<页面>/index.vue`、`views/<页面>/components/` | 页面组合与局部交互；复杂组件按职责拆成目录入口和相邻模块 |
+| `views/<页面>/composables/` | 页面查询、轮询、表单及操作生命周期 |
+| `presenter.ts`、页面 `utils/` | 纯展示投影或该页面拥有的业务转换，不启动请求 |
+| `components/usage/`、`components/account/` | 跨页面复用的用量、健康时间线、套餐和额度窗口展示 |
+| `composables/` | 请求取消与过期结果隔离、分页、选择、异步动作、目录加载等共享机制 |
+| `utils/` | 按用途分开的数据解析、数字与时长格式化、位置校验、客户端配置、插件导航及颜色工具 |
+
+概览的数据请求和刷新由 `useDashboard` 持有，`views/dashboard/presenter.ts` 生成展示模型。
+Key 创建与编辑共用 `useApiKeyEditor` 和 `ApiKeyFormModal`，创建结果与密钥使用弹窗各自管理明文生命周期。
+用量表格的列、展示投影及健康时间线规则集中在 `components/usage/shared/`，管理页面与 Key 用量页共用展示，
+各自的查询仍使用对应身份允许的 API
+
+`useRequestState` 管理取消、请求序号与失效结果；分页按接口合同分别复用 `usePagedQuery` 或 `useStablePagedQuery`。
+`useAsyncAction` 的 `loading` 是动作进行状态，调用方直接使用；接口错误由请求层提示，本地操作错误按动作配置处理。
+可由草稿与保存快照比较得到的修改状态使用派生值，不另维护同步标志。
+展示字段和业务资格沿用后端事实，数字与持续时长可以在前端格式化，日期与时区合同见 [API 页面时间](api.md#页面时间合同)
 
 ## 4. 数据面请求生命周期
 
@@ -480,7 +506,7 @@ Provider 管理适配在仍持有结构化失败事实时选择静态 `public_me
 连接测试的 `gateway` / `provider` / `upstream` 来源以及 `not_sent` / `sent` / `ambiguous` 发送状态由 Core 在
 仍持有完整执行错误时一次判定；Vue 只能根据稳定字段生成摘要，不能匹配英文错误句子反推来源
 
-Vue 普通管理请求的错误提示由 `api/request.ts` 响应拦截器统一负责：优先展示安全信封的 `message`，
+Vue 普通管理请求的错误提示由 `api/request.ts` 请求封装统一负责：优先展示安全信封的 `message`，
 缺失或空白时才使用请求层的 HTTP、网络或超时兜底；成功业务码为 `200`，HTTP 成功但业务码失败也会拒绝。
 规范化异常保留 `status`、`code`、`requestId` 与 `kind`。页面和 `useAsyncAction` 不重复弹出接口错误；
 查询可以保留失败状态与重试入口，本地校验、文件操作、SSE 诊断和成功响应中的业务结果仍归各自 owner
@@ -645,9 +671,9 @@ HTTP validation
 ```
 
 会改变路由快照或安全配置的 mutation 在同一 PostgreSQL 事务中提交业务事实、推进内部
-`config_revision` 并写入脱敏审计。`configRevision` 不作为客户端写入的乐观并发前置条件；
-少数账号/分组响应返回它用于标识已提交的配置。插件配置等资源另有 `revision` / `expectedRevision` 检查，
-不能与全局配置版本混用
+`config_revision` 并写入脱敏审计。账号、分组等响应中的 `configRevision` 表示已提交配置，
+不构成所有写入的统一前置条件。运行设置整体替换必须携带读取版本，Store 在同一事务比较后才提交，
+防止覆盖并发修改；插件、代理等资源使用各自的 `revision` / `expectedRevision`，不能与全局版本混用
 
 额度、cooldown、目录 generation、请求统计和自动 credential refresh 属于运行时观测，不推进全局
 revision；credential 轮换只推进账号自己的 `credential_revision`。Redis 通知用于缩短收敛延迟，
@@ -716,8 +742,8 @@ OpenAI 订阅周期属于按需个人信息，不是额度事实。Admin 账号�
 ### 额度预测
 
 账号容量预测属于 Admin 的只读派生规则，不参与 quota 权威状态、调度或金额结算。Store 通过专用采样端口
-在同一 SQL 快照内返回截至观测时间的累计数值及有界历史 Provider 文档；原生 Provider 复用协议解析器解释
-文档，插件由 Runtime 本地解释 SDK 声明的版本化额度观测，不在历史查询中调用插件进程。观测通过 Core 原有
+在同一 SQL 快照内返回截至观测时间的累计数值及有界历史 Provider 文档；对应 Provider 复用协议解析器解释
+文档，不在历史查询中刷新上游额度。观测通过 Core 原有
 请求结算持久化，账号关联由实际执行上下文确定，窗口身份与归属必须匹配当前额度窗口。Admin 按中立的额度
 事实选择近期进度段预测剩余量，再加本周期已记录用量形成周期总量。
 周期以额度重置为边界，重置后累计与样本重新开始。该采样不改变全站完整交付用量口径，不创建第二份
@@ -888,9 +914,6 @@ RUST_MIN_STACK=16777216 cargo +1.97.0 test --manifest-path backend/Cargo.toml --
 插件 Runtime 的真实子进程与持久化测试使用 `CPR_PLUGIN_TEST_DATABASE_URL` 和
 `CPR_PLUGIN_TEST_REDIS_URL` 指向专用实例；未提供插件专用变量时复用 `CPR_TEST_DATABASE_URL` 与 `CPR_TEST_REDIS_URL`。
 密码及隔离要求与上述 Store 测试一致，CI 缺少服务配置时直接失败。
-设置 `CPR_PLUGIN_TEST_LIVE_HTTP=1` 会额外请求 GitHub 公共 HTTPS API，验证受管出站链路；这不代表模型推理验收。
-若测试环境使用 Fake-IP 或私网 DNS，需通过 `CPR_PLUGIN_TEST_LIVE_NETWORK_RANGES` 显式提供逗号分隔的
-CIDR 授权。该选项只用于真实网络测试，默认为空，不改变生产网络策略或其他测试的授权
 
 测试归档缓存在 Cargo 测试临时目录的 `plugin-packages-v1/`，按含 worker 摘要的清单跨进程复用；
 每项测试独立校验、解包并创建会话、子进程与 Store，缓存不承载可变运行状态

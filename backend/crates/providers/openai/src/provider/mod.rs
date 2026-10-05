@@ -1,4 +1,4 @@
-//! Codex 的 `gateway-core` Provider adapter。
+//! Codex 的 `gateway-core` Provider adapter
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -118,17 +118,17 @@ const PROVIDER_NAME: &str = "openai";
 const HTTP_SSE_TRANSPORT: &str = "http_sse";
 const HTTP_JSON_TRANSPORT: &str = "http_json";
 const WEBSOCKET_TRANSPORT: &str = "websocket";
-// 在已观测到的 Codex OAuth 上游 16 MiB 附近消息边界前留出传输 metadata 余量。
+// 在已观测到的 Codex OAuth 上游 16 MiB 附近消息边界前留出传输 metadata 余量
 const WEBSOCKET_HTTP_FALLBACK_THRESHOLD_BYTES: usize = 15 * 1024 * 1024;
 const MAX_COOKIE_HEADER_BYTES: usize = 16 * 1024;
 /// 提交边界前预取 128 KiB 原始上游 chunk；容纳携带配置回显的前导事件，
 /// 超过阈值后结束无感换号窗口（最后一个 chunk 可越过阈值），
-/// 但不会把上游数据改写成协议失败。
+/// 但不会把上游数据改写成协议失败
 const MAX_STREAM_PREFETCH_BYTES: usize = 128 * 1024;
 /// 短暂保留 response.created 等结构事件，让随后到达的明确拒绝可以无感换号；
-/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件。
+/// 到期即放行，避免模型长时间思考时让客户端一直收不到首事件
 const STREAM_REPLAY_GRACE: Duration = Duration::from_millis(2_500);
-// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照。
+// 额度拒绝后先给上游额度结算留出时间，再以受限时长同步 usage 快照
 const QUOTA_FAILURE_REFRESH_DELAY: Duration = Duration::from_secs(2);
 const QUOTA_FAILURE_REFRESH_TIMEOUT: Duration = Duration::from_secs(5);
 pub const OFFICIAL_CODEX_BASE_PATH: &str = "/backend-api";
@@ -236,7 +236,7 @@ impl CodexProvider {
         Ok(self.client.clone().with_request_profile(profile))
     }
 
-    // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权。
+    // Provider 构造集中装配独立领域服务和透明传输依赖，拆分参数会模糊所有权
     #[expect(clippy::too_many_arguments)]
     pub fn new(
         selector: Arc<CodexCredentialSelector>,
@@ -472,7 +472,7 @@ impl Provider for CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
-        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖。
+        // 请求设置先形成原生正文基线；attempt 的显式改写进入终端后不再次被覆盖
         let mut operation = Operation::Generate(generate.clone());
         if context.disable_fast()
             && let Operation::Generate(generate) = &operation
@@ -514,13 +514,13 @@ impl Provider for CodexProvider {
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
         // 其他协议必须先取得真实账号，再按固定 attempt 阶段调用转换器；选号前不能
-        // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段。
+        // 把未知正文当成 OpenAI wire 解释会话、亲和或传输字段
         let upstream = (generate.protocol_payload().protocol() == PROVIDER_NAME)
             .then(|| encode_generate_request(generate, upstream_model.as_str(), None))
             .transpose()
             .map_err(map_request_error)?;
-        // 固定调度约束：Guardian 分类先于选号，不能随原生/适配器发送路径改变。
-        // 复用编码器的权威 metadata 解析，但只为原生路径准备会话与传输状态。
+        // 固定调度约束：Guardian 分类先于选号，不能随原生/适配器发送路径改变
+        // 复用编码器的权威 metadata 解析，但只为原生路径准备会话与传输状态
         let guardian = upstream
             .as_ref()
             .is_some_and(CodexResponsesRequest::is_guardian);
@@ -563,7 +563,7 @@ impl Provider for CodexProvider {
                 .await
                 .map_err(map_selection_error)
         };
-        // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长。
+        // 恢复期间排队也消耗启动窗口；只包住选账号，不限制业务响应时长
         let lease = if let Some(remaining) = context.connection_budget().startup_remaining() {
             tokio::time::timeout(remaining, selection)
                 .await
@@ -781,7 +781,7 @@ impl CodexProvider {
             })
         {
             // HTTP store=false 没有原生续链，完整历史仍由客户端持有；不能把 delta
-            // 当作独立新请求发送，也不能用 previous_response_id 猜测上游存储状态。
+            // 当作独立新请求发送，也不能用 previous_response_id 猜测上游存储状态
             return Err(continuation_replay_required_error("scope_unavailable"));
         }
         scope_request_to_account(
@@ -961,7 +961,7 @@ impl CodexProvider {
 }
 
 fn native_request_requirements(request: &GenerateRequest) -> CapabilityRequirements {
-    // 此处只解释已知 OpenAI wire；不在 Core 的通用转换路径推断任意目标协议。
+    // 此处只解释已知 OpenAI wire；不在 Core 的通用转换路径推断任意目标协议
     Operation::Generate(GenerateRequest::from_protocol_payload(
         request.protocol_payload().clone(),
     ))
