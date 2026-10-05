@@ -1,3 +1,5 @@
+//! 准备单个插件实例的进程、RPC 会话与能力贡献
+
 use super::{
     AdminError, Arc, Duration, Handshake, PluginCallbackPorts, PluginCallbacks, PluginInstance,
     PluginPrivateState, PluginRuntime, PluginStateStoreErrorKind, PreparedContributions,
@@ -65,7 +67,7 @@ impl PluginRuntime {
                     package.manifest(),
                     &instance.bindings,
                 )?;
-                // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移。
+                // 发行清单与当前 Runtime 共用同一份能力声明，不能让二者分别漂移
                 if !crate::package::host_supports(package.manifest())? {
                     return Err(AdminError::invalid("该插件声明的业务能力尚未接入运行时"));
                 }

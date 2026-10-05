@@ -1,3 +1,5 @@
+//! 上游适配请求与事件的元数据、正文及续接信息编解码
+
 use serde::{Deserialize, Serialize};
 
 use super::{UpstreamAdapterEvent, UpstreamAdapterRequest, UpstreamContinuation, UpstreamFailure};

@@ -1,3 +1,5 @@
+//! 验证插件制品身份、信任接受、迁移与安装幂等性
+
 use std::collections::BTreeMap;
 
 use gateway_admin::{
@@ -153,7 +155,7 @@ async fn trust_migration_removes_only_obsolete_metadata_fields() {
         ),
         ('d', serde_json::json!({})),
     ] {
-        // 每个制品使用独立平台，保留同一版本的平台不可变约束。
+        // 每个制品使用独立平台，保留同一版本的平台不可变约束
         let fixture = artifact(digest, &[&format!("test-{digest}")]);
         let installed = store
             .install_artifact(fixture.clone(), PluginSource::Upload, &context())

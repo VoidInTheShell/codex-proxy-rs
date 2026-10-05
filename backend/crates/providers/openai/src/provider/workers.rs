@@ -1,4 +1,4 @@
-//! OpenAI Provider 向 Host 贡献的后台 worker。
+//! OpenAI Provider 向 Host 贡献的后台 worker
 
 use super::*;
 use crate::transport::profile::cli_release::CliReleaseService;
@@ -232,7 +232,7 @@ impl ScheduledTask for OpenAiDesktopReleaseTask {
             };
             if let Err(error) = result {
                 // 上游检查失败已经作为 Provider 观察事实保存；本周期本身正常完成，
-                // 避免 Host 的短退避持续请求固定官方 appcast。
+                // 避免 Host 的短退避持续请求固定官方 appcast
                 tracing::warn!(error = %error, "OpenAI Desktop release check failed");
             }
             Ok(())
@@ -394,7 +394,7 @@ impl ScheduledTask for OpenAiWarmupTask {
             use chrono::Timelike as _;
             let now = chrono::Utc::now();
             let local_now = self.timezone.local(now);
-            // 回拨产生的第二个相同时刻不能再次执行。
+            // 回拨产生的第二个相同时刻不能再次执行
             if self
                 .timezone
                 .resolve_local(local_now.naive_local())

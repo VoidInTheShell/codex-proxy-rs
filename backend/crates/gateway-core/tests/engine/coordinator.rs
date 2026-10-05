@@ -1,4 +1,4 @@
-//! 单行 `model_requests`、账号重试与下游提交屏障测试。
+//! 单行 `model_requests`、账号重试与下游提交屏障测试
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::num::NonZeroU32;
@@ -278,7 +278,7 @@ enum Script {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
     },
-    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline。
+    /// 产出 `items` 后永久悬挂的流；用于逼出会话级 deadline
     HangingStream {
         account_id: &'static str,
         items: Vec<Result<GatewayEvent, ProviderError>>,
@@ -375,7 +375,7 @@ impl Provider for ScriptedProvider {
             .expect("operations lock")
             .push(request.operation().clone());
         self.contexts.lock().expect("contexts lock").push(context);
-        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本。
+        // 模拟官方发布在每次上游尝试开始后推进，重试应继续使用首次解析版本
         self.profile_generation.fetch_add(1, Ordering::SeqCst);
         let script = self
             .scripts
@@ -802,7 +802,7 @@ fn model_request(operation: &Operation, deadline: SystemTime) -> NewModelRequest
         continuation: Default::default(),
         image_generation_requested: operation.image_generation_requested(),
         started_at: SystemTime::now(),
-        deadline_at: deadline,
+        deadline_at: deadline.into(),
     }
 }
 
@@ -865,6 +865,35 @@ fn terminal_non_idempotent_failure(
         gateway_core::engine::EngineError::Provider(_)
     ));
     (store, provider)
+}
+
+#[test]
+fn request_without_total_deadline_can_complete_after_ten_minutes() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, store, provider) = coordinator(vec![Script::Stream {
+        account_id: "acct_one",
+        items: complete_stream(Some(12)),
+    }]);
+    let mut request = model_request(&operation, SystemTime::now());
+    request.started_at = SystemTime::now() - Duration::from_secs(601);
+    request.deadline_at = gateway_core::lifecycle::Deadline::default();
+    let mut session = block_on(coordinator.start(
+        request,
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .expect("start long request");
+    block_on(session.collect_uncommitted()).expect("collect long response");
+    block_on(session.commit_downstream(Some(200))).expect("commit long response");
+    assert!(session.is_finalized());
+    assert_eq!(provider.contexts.lock().unwrap()[0].deadline().at(), None);
+    let state = store.state.lock().unwrap();
+    assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Succeeded);
+    assert_eq!(state.attempts.len(), 1);
 }
 
 #[test]
@@ -2686,7 +2715,7 @@ fn retryable_error_after_credential_recovery_switches_account_instead_of_termina
     assert_eq!(contexts.len(), 3);
     assert_eq!(contexts[1].required_account(), Some(&first));
     assert!(contexts[1].credential_recovery_attempted());
-    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号。
+    // recovery 钉账号只绑定 replay attempt；replay 上的 429 之后必须能换号
     assert_eq!(contexts[2].required_account(), None);
     assert!(contexts[2].excluded_accounts().contains(&first));
     let state = store.state.lock().expect("store lock");
@@ -2789,7 +2818,7 @@ fn rate_limited_account_exhaustion_survives_a_later_empty_selection() {
     assert_eq!(state.attempts.len(), 1);
     assert_eq!(state.intermediate_failures, 1);
     assert_eq!(state.finalizations.len(), 1);
-    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent。
+    // attempt-1 已把 sent 落库；attempt-2 空选路终态不得降级回 not_sent
     assert_eq!(state.finalizations[0].send_state, UpstreamSendState::Sent);
     assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
     assert_eq!(
@@ -3471,6 +3500,124 @@ fn transient_rejection() -> ProviderError {
         Duration::ZERO,
         Duration::ZERO,
     )
+}
+
+#[test]
+fn server_retry_advice_should_override_local_backoff_and_transport_fallback() {
+    let advised_delay = Duration::from_millis(120);
+    for rejection in [
+        transient_rejection().with_transient_retry(
+            NonZeroU32::MIN,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        ),
+        ProviderError::new(ProviderErrorKind::Transport, UpstreamSendState::NotSent)
+            .with_pre_delivery_transport_fallback(),
+    ] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let (coordinator, _, provider) = coordinator(vec![
+            Script::Stream {
+                account_id: "acct_first",
+                items: vec![Err(rejection.with_retry_after(advised_delay))],
+            },
+            Script::Stream {
+                account_id: "acct_first",
+                items: complete_stream(None),
+            },
+        ]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        let started = std::time::Instant::now();
+        let mut collection = Box::pin(session.collect_uncommitted());
+        assert!(block_on(async { futures::poll!(&mut collection) }).is_pending());
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+        block_on(collection).unwrap();
+        assert!(started.elapsed() >= advised_delay);
+        let contexts = provider.contexts.lock().unwrap();
+        assert_eq!(contexts.len(), 2);
+        assert_eq!(
+            contexts[1].required_account(),
+            Some(&ProviderAccountId::new("acct_first").unwrap())
+        );
+    }
+}
+
+#[test]
+fn zero_server_retry_advice_should_override_nonzero_local_backoff() {
+    let operation = generate_operation();
+    let route_plan = plan(&operation);
+    let (coordinator, _, _) = coordinator(vec![
+        Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(transient_rejection()
+                .with_transient_retry(
+                    NonZeroU32::MIN,
+                    Duration::from_secs(60),
+                    Duration::from_secs(60),
+                )
+                .with_retry_after(Duration::ZERO))],
+        },
+        Script::Stream {
+            account_id: "acct_first",
+            items: complete_stream(None),
+        },
+    ]);
+    let mut session = block_on(coordinator.start(
+        model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+        operation,
+        route_plan,
+        None,
+        None,
+        CancellationToken::new(),
+    ))
+    .unwrap();
+    let mut collection = Box::pin(session.collect_uncommitted());
+    assert!(matches!(
+        block_on(async { futures::poll!(&mut collection) }),
+        std::task::Poll::Ready(Ok(_))
+    ));
+}
+
+#[test]
+fn terminal_rejection_should_prevent_not_sent_rotation_and_explicit_transport_recovery() {
+    for fallback in [false, true] {
+        let operation = generate_operation();
+        let route_plan = plan(&operation);
+        let mut error =
+            ProviderError::new(ProviderErrorKind::Unavailable, UpstreamSendState::NotSent)
+                .with_replay_safe()
+                .with_retry_prohibited();
+        if fallback {
+            error = error.with_pre_delivery_transport_fallback();
+        }
+        assert!(error.stable_snapshot().retry_is_prohibited());
+        let (coordinator, _, provider) = coordinator(vec![Script::Stream {
+            account_id: "acct_first",
+            items: vec![Err(error)],
+        }]);
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert!(matches!(
+            block_on(session.collect_uncommitted()),
+            Err(EngineError::Provider(_))
+        ));
+        assert_eq!(provider.contexts.lock().unwrap().len(), 1);
+    }
 }
 
 #[test]
@@ -4418,7 +4565,7 @@ fn interrupted_first_attempt_write_never_restarts_selection_or_creates_a_zero_at
             drop(next);
             assert_eq!(store.state.lock().unwrap().created, 1);
             assert_eq!(provider.released_leases.load(Ordering::SeqCst), 0);
-            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建。
+            // 首写属于可丢弃观测；丢失返回确认后不臆测入库成功，也不能退回零次重新创建
             assert!(release.send(()).is_err());
             if cancel {
                 session.cancel_and_finalize().await.unwrap();

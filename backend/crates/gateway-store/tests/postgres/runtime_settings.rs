@@ -1,3 +1,5 @@
+//! 验证运行设置的数据库约束、升级保留与快照发布
+
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, TimeDelta, Utc};
@@ -58,7 +60,7 @@ async fn smart_settings_upgrade_preserves_selection_and_publishes_custom_config(
     let Some(database) = TestDatabase::create_through("smart_config", 18).await else {
         return;
     };
-    // 升级前不能用包含新列的 Repository，直接写入旧版本已有字段。
+    // 升级前不能用包含新列的 Repository，直接写入旧版本已有字段
     sqlx::query("update runtime_settings set rotation_strategy = 'sticky', refresh_margin_seconds = 3600 where id = 1")
         .execute(&database.pool).await.unwrap();
     super::TEST_MIGRATOR.run(&database.pool).await.unwrap();
@@ -495,7 +497,7 @@ async fn request_location_defaults_and_updates_reach_the_runtime_snapshot() {
         .unwrap();
     assert!(!disabled_snapshot.settings.request_location_enabled);
     assert_eq!(disabled_snapshot.settings.request_location, expected);
-    // 位置开关与自动冻结共用设置写入，切换位置不能覆盖冻结参数。
+    // 位置开关与自动冻结共用设置写入，切换位置不能覆盖冻结参数
     for saved in [&settings, &disabled_settings] {
         assert!(saved.account_auto_freeze_enabled);
         assert_eq!(saved.account_auto_freeze_threshold, 17);
@@ -917,7 +919,7 @@ async fn control_plane_replacement_commits_one_writer_per_revision_and_preserves
     .await
     .unwrap();
     assert_eq!(audit_count, 1);
-    // API Key 更新也推进相同版本，旧设置快照不能复活已经替换的 Key。
+    // API Key 更新也推进相同版本，旧设置快照不能复活已经替换的 Key
     let mut key_audit = replacement("key", 3600).audit;
     key_audit.action = "settings.admin_key".into();
     repository
@@ -1072,7 +1074,7 @@ async fn warmup_cursor_resolves_dst_and_deduplicates_across_timezones() {
         "2026-11-01T05:30:00Z".parse::<DateTime<Utc>>().unwrap()
     );
     assert!(!repository.claim_warmup_slot(zone, slot).await.unwrap());
-    // 回拨中的重复本地时刻取较早一次，不能误挡后一分的正常调度。
+    // 回拨中的重复本地时刻取较早一次，不能误挡后一分的正常调度
     let next = slot + TimeDelta::minutes(1);
     assert!(repository.claim_warmup_slot(zone, next).await.unwrap());
     let utc: DeploymentTimeZone = "UTC".parse().unwrap();

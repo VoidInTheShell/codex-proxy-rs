@@ -1,3 +1,5 @@
+//! 验证 OpenAI 管理能力、请求画像、Bundle 组装与额度投影
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 use std::sync::{Arc, Mutex};
@@ -63,6 +65,42 @@ const COMPLETED_SESSION_SSE: &str = concat!(
     "event: response.completed\n",
     "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_initialized_session\",\"model\":\"gpt-5.4\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n"
 );
+
+#[tokio::test]
+async fn plan_display_should_distinguish_pro_tiers_and_preserve_other_official_names() {
+    let config = valid_config();
+    let bundle = provider_openai::initialize(config.config.clone(), provider_ports())
+        .await
+        .unwrap();
+    let admin = bundle.admin_provider();
+    for (raw, display) in [
+        ("prolite", "ProLite"),
+        ("pro", "Pro"),
+        ("promax", "ProMax"),
+        ("free", "Free"),
+        ("go", "Go"),
+        ("plus", "Plus"),
+        ("team", "Team"),
+        ("self_serve_business_prolite", "Self Serve Business ProLite"),
+        (
+            "self_serve_business_usage_based",
+            "Self Serve Business Usage Based",
+        ),
+        ("business", "Business"),
+        ("ent26", "Enterprise"),
+        ("enterprise", "Enterprise"),
+        ("hc", "Enterprise"),
+        ("enterprise_cbp_automation", "Enterprise (Automation)"),
+        ("enterprise_cbp_usage_based", "Enterprise CBP Usage Based"),
+        ("edu", "Edu"),
+        ("education", "Edu"),
+        ("edu_plus", "Edu Plus"),
+        ("edu_pro", "Edu Pro"),
+        ("future_plan", "future_plan"),
+    ] {
+        assert_eq!(admin.plan_type_display(raw), display);
+    }
+}
 
 #[tokio::test]
 async fn account_capabilities_distinguish_oauth_from_api_key_and_unknown_credentials() {
@@ -559,7 +597,7 @@ async fn openai_core_provider_projects_codex_request_observation_without_routing
 
     assert_eq!(observation.request_kind.as_deref(), Some("compaction"));
     assert_eq!(observation.subagent_kind.as_deref(), Some("review"));
-    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值。
+    // Codex 当前只在特定多代理预设组合下给出 reasoning_preset；普通 high 保持空值
     assert_eq!(observation.reasoning_preset, None);
     assert!(observation.compact);
 }
@@ -643,7 +681,7 @@ async fn openai_admin_provider_persists_the_full_pending_envelope_and_binds_owne
                 request_id: "request-complete".to_owned(),
             },
             flow_id: started.flow_id,
-            callback_url: "http://localhost:1455/auth/callback?code=unused&state=unused".to_owned(),
+            callback_url: "http://127.0.0.1:1455/auth/callback?code=unused&state=unused".to_owned(),
         })
         .await
         .expect_err("wrong owner");
@@ -1359,7 +1397,7 @@ async fn openai_admin_preserves_expired_window_usage_and_exhaustion_attribution(
             .await
             .expect("project quota");
         assert_eq!(projected.limit_reached, exhausted);
-        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口。
+        // 账号接口还会归一化耗尽展示；过期周窗口不能把触顶错误转移到短期窗口
         projected.apply_limit_reached_display();
         let primary = projected
             .windows
@@ -1630,6 +1668,21 @@ fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
         )]))),
         ClientRoutingScope::all_accounts(),
     ))
+}
+
+pub(crate) async fn initialized_test_provider(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    let mut config = valid_config();
+    config.config.api.base_url = base_url;
+    provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized provider")
+    .core_provider()
 }
 
 fn provider_ports() -> ProviderStorePorts {
@@ -2173,12 +2226,14 @@ mod errors {
     }
 
     #[tokio::test]
-    async fn manual_refresh_reports_deactivated_accounts_for_any_rejection_status() {
-        // 停用消息是与状态无关的账号级事实：401 也按官方语义终态并归为 Banned 提示；
-        // 手动刷新仍不改写账号状态，终态由 Worker 周期统一落库。
+    async fn manual_refresh_preserves_banned_evidence_without_promoting_401_to_terminal() {
         for (status, kind, message) in [
             (400, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
-            (401, Kind::Invalid, "OpenAI 账号已被停用，请检查账号状态"),
+            (
+                401,
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("POST"))
@@ -2209,34 +2264,37 @@ mod errors {
 
     #[tokio::test]
     async fn manual_refresh_reports_known_upstream_failures_without_changing_account_state() {
-        // 401 与显式拒绝码一样映射为 Invalid + 重新授权提示（对齐官方终态语义）；
-        // 400 的 RFC invalid_grant、429/5xx 等仍按上游瞬态事实提示。
         for (status, code, expected_kind, expected_message) in [
             (
                 401,
                 "refresh_token_reused",
-                Kind::Invalid,
+                Kind::BadGateway,
                 "刷新令牌已被使用，请重新授权",
             ),
             (
                 401,
                 "refresh_token_expired",
-                Kind::Invalid,
+                Kind::BadGateway,
                 "刷新令牌已过期，请重新授权",
             ),
             (
                 401,
                 "refresh_token_invalidated",
-                Kind::Invalid,
+                Kind::BadGateway,
                 "刷新令牌已被撤销，请重新授权",
             ),
             (
                 401,
                 "token_expired",
-                Kind::Invalid,
+                Kind::BadGateway,
                 "刷新令牌不可用，请重新授权",
             ),
-            (401, "unknown", Kind::Invalid, "刷新令牌已失效，请重新授权"),
+            (
+                401,
+                "unknown",
+                Kind::BadGateway,
+                "OpenAI 拒绝了令牌刷新，请检查账号授权状态",
+            ),
             (
                 400,
                 "refresh_token_reused",
@@ -2381,7 +2439,7 @@ mod errors {
             .prepare_refresh(command())
             .await
             .unwrap_err();
-        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界。
+        // 既有 transport 策略未认定此错误为安全重试，本次不能因展示更详细而放宽重试边界
         assert_eq!(error.kind(), Kind::Ambiguous);
         assert_eq!(
             error.public_message(),

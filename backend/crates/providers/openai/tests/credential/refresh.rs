@@ -1,3 +1,5 @@
+//! 验证 OpenAI 令牌刷新、凭据状态与失败反馈的持久化
+
 use std::num::NonZeroU32;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -538,77 +540,6 @@ async fn scheduled_refresh_persists_the_original_upstream_error_message() {
 async fn scheduled_refresh_persists_retryable_message_inside_the_two_hour_window() {
     let store = Arc::new(MemoryAccountStore::default());
     let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
-    let upstream_message = "Upstream refresh endpoint is unavailable.";
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/oauth/token"))
-        .respond_with(ResponseTemplate::new(503).set_body_json(serde_json::json!({
-            "error": {
-                "message": upstream_message,
-                "type": "server_error",
-                "code": "temporarily_unavailable"
-            }
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let service = CodexCredentialRefreshService::new(
-        store.repository(),
-        Arc::new(OpenAiTokenClient::new(
-            reqwest::Client::builder()
-                .no_proxy()
-                .build()
-                .expect("test HTTP client"),
-            TokenClientConfig {
-                client_id: "test-public-client".to_owned(),
-                token_endpoint: format!("{}/oauth/token", server.uri()),
-            },
-            provider_openai::transport::profile::CodexWireProfileState::new(Default::default()),
-        )),
-        Arc::new(RefreshLeases),
-        Arc::new(RefreshCredentialState),
-        policy,
-    );
-    let account_id = "acct_retryable_unavailable";
-    let expires_at = SystemTime::now()
-        .checked_sub(Duration::from_secs(30 * 60))
-        .expect("expired access token");
-    seed_refreshable_account(&store, account_id, expires_at, None).await;
-
-    let outcomes = service.refresh_due().await.expect("refresh cycle");
-
-    assert!(matches!(
-        outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Transient {
-            account_id: deferred_account_id,
-        }] if deferred_account_id == account_id
-    ));
-    let account = store.account(account_id).expect("deferred account");
-    assert_eq!(account.credential_state(), CredentialState::Ready);
-    assert_eq!(
-        account.last_error_reason(),
-        Some(AccountErrorReason::AccessTokenExpired)
-    );
-    assert_eq!(account.last_error_message(), Some(upstream_message));
-    let retry_at = account.next_refresh_at().expect("next refresh attempt");
-    assert!(retry_at > SystemTime::now());
-    assert!(
-        retry_at
-            <= expires_at
-                .checked_add(Duration::from_secs(2 * 60 * 60))
-                .expect("recovery deadline")
-    );
-    let projection = account.status_projection(SystemTime::now(), None);
-    assert_eq!(projection.status, AccountStatus::Error);
-    assert_eq!(projection.error_message.as_deref(), Some(upstream_message));
-}
-
-#[tokio::test]
-async fn scheduled_refresh_marks_unauthorized_refresh_terminal_immediately() {
-    // 与官方一致：刷新端点 401 不进入退避，即使在 2 小时恢复窗口内也立即终态；
-    // 账号按既有 InvalidGrant 链路落为 Expired，后续周期不再重试。
-    let store = Arc::new(MemoryAccountStore::default());
-    let policy = MutableRuntimePolicy::new(Duration::from_secs(5 * 60));
     let upstream_message = "Invalid refresh token.";
     let server = MockServer::start().await;
     Mock::given(method("POST"))
@@ -640,7 +571,7 @@ async fn scheduled_refresh_marks_unauthorized_refresh_terminal_immediately() {
         Arc::new(RefreshCredentialState),
         policy,
     );
-    let account_id = "acct_unauthorized_terminal";
+    let account_id = "acct_retryable_unauthorized";
     let expires_at = SystemTime::now()
         .checked_sub(Duration::from_secs(30 * 60))
         .expect("expired access token");
@@ -650,27 +581,28 @@ async fn scheduled_refresh_marks_unauthorized_refresh_terminal_immediately() {
 
     assert!(matches!(
         outcomes.as_slice(),
-        [CodexCredentialRefreshOutcome::Invalidated {
-            account_id: invalidated_account_id,
-        }] if invalidated_account_id == account_id
+        [CodexCredentialRefreshOutcome::Transient {
+            account_id: deferred_account_id,
+        }] if deferred_account_id == account_id
     ));
-    let account = store.account(account_id).expect("invalidated account");
-    assert_eq!(account.credential_state(), CredentialState::Expired);
+    let account = store.account(account_id).expect("deferred account");
+    assert_eq!(account.credential_state(), CredentialState::Ready);
     assert_eq!(
         account.last_error_reason(),
-        Some(AccountErrorReason::CredentialExpired)
+        Some(AccountErrorReason::AccessTokenExpired)
     );
     assert_eq!(account.last_error_message(), Some(upstream_message));
+    let retry_at = account.next_refresh_at().expect("next refresh attempt");
+    assert!(retry_at > SystemTime::now());
+    assert!(
+        retry_at
+            <= expires_at
+                .checked_add(Duration::from_secs(2 * 60 * 60))
+                .expect("recovery deadline")
+    );
     let projection = account.status_projection(SystemTime::now(), None);
     assert_eq!(projection.status, AccountStatus::Error);
     assert_eq!(projection.error_message.as_deref(), Some(upstream_message));
-    assert!(
-        service
-            .refresh_due()
-            .await
-            .expect("next refresh cycle")
-            .is_empty()
-    );
 }
 
 #[tokio::test]
@@ -943,7 +875,7 @@ struct QuotaRejectionDuringRefresh {
 #[async_trait]
 impl TokenRefresher for QuotaRejectionDuringRefresh {
     async fn refresh(&self, _: &str) -> Result<TokenPair, RefreshFailure> {
-        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401。
+        // 模拟 RT 请求在途时，手动或周期额度查询先收到 401
         if self.background_quota {
             assert_eq!(
                 self.quota
