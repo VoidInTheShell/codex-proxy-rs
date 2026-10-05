@@ -1,3 +1,5 @@
+//! 验证运行设置编译、Key 默认值与显式请求覆盖的解析和继承
+
 use std::{collections::BTreeMap, sync::Arc};
 
 use gateway_core::{

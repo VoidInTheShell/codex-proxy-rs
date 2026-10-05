@@ -1,3 +1,5 @@
+//! 账号出站代理管理、占用释放与探测结果的用例测试
+
 use async_trait::async_trait;
 use gateway_admin::{
     model::{MutationContext, Revision, proxies::*},

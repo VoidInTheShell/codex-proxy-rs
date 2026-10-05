@@ -1,4 +1,4 @@
-//! Codex HTTP/SSE/WebSocket 上游 transport。
+//! Codex HTTP/SSE/WebSocket 上游 transport
 
 pub mod canonical;
 pub mod catalog;

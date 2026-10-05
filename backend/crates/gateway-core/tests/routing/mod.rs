@@ -1,3 +1,5 @@
+//! 路由领域测试入口，以及版本、账号范围与 Key 策略约束测试
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 

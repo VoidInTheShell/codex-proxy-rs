@@ -1,3 +1,5 @@
+//! 验证取消树的唤醒、父子隔离、竞态处理与资源释放
+
 use std::future::Future as _;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Barrier};
@@ -9,7 +11,7 @@ use gateway_core::lifecycle::CancellationToken;
 #[test]
 fn discarded_cancellation_branches_release_allocations() {
     let token = CancellationToken::new();
-    // 预热一次，允许取消信号保留固定大小的通知状态。
+    // 预热一次，允许取消信号保留固定大小的通知状态
     discard_cancellation_branch(&token);
 
     let allocations = allocation_counter::measure(|| {
@@ -62,7 +64,7 @@ fn completing_child_cancellation_releases_ancestor_allocations() {
 }
 
 fn discard_cancellation_branch(token: &CancellationToken) {
-    // select 先轮询取消分支，再由另一个就绪分支获胜并丢弃取消等待。
+    // select 先轮询取消分支，再由另一个就绪分支获胜并丢弃取消等待
     let selected = futures::future::select(Box::pin(token.cancelled()), futures::future::ready(()))
         .now_or_never();
     assert!(matches!(selected, Some(futures::future::Either::Right(_))));
@@ -167,7 +169,7 @@ fn cancellation_racing_with_wait_registration_and_drop_does_not_lose_wakeup() {
                 .is_pending();
             finished.wait();
 
-            // 取消完成后再检查，既验证就绪结果，也验证 Pending 路径实际收到唤醒。
+            // 取消完成后再检查，既验证就绪结果，也验证 Pending 路径实际收到唤醒
             if pending {
                 assert!(counter.0.load(Ordering::Relaxed) > 0);
                 assert!(waiting.now_or_never().is_some());

@@ -1,3 +1,5 @@
+//! OpenAI 协议 HTTP 与 WebSocket 接口的测试入口
+
 mod auth;
 mod endpoint;
 mod error;
