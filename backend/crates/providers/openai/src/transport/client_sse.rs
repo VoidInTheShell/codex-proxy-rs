@@ -664,6 +664,8 @@ fn websocket_connection_profile(
         "user-agent",
         "version",
         X_OPENAI_MEMGEN_REQUEST_HEADER,
+        "x-codex-guardian",
+        "x-openai-internal-codex-residency",
     ]
     .map(|name| {
         headers

@@ -1807,18 +1807,30 @@ async fn capture_turn_state_request(
     }
     if let Some(client_turn_state) = client_turn_state {
         protocol_context.insert("turn_state".to_owned(), json!(client_turn_state));
+        protocol_context.insert(
+            "opaque_request_headers".to_owned(),
+            json!([["x-codex-turn-state", STANDARD.encode(client_turn_state)]]),
+        );
+    }
+    let mut body = Map::from_iter([
+        ("model".to_owned(), json!("gpt-5.4")),
+        ("input".to_owned(), json!("current input")),
+        ("client_metadata".to_owned(), json!({"custom":"preserved"})),
+    ]);
+    if let Some(state) = client_turn_state {
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            body.insert(key.to_owned(), json!(state));
+            body["client_metadata"]
+                .as_object_mut()
+                .unwrap()
+                .insert(key.to_owned(), json!(state));
+        }
     }
     let operation = Operation::Generate(
         GenerateRequest::from_protocol_payload(
-            ProtocolPayload::json_object(
-                "openai",
-                Map::from_iter([
-                    ("model".to_owned(), json!("gpt-5.4")),
-                    ("input".to_owned(), json!("current input")),
-                ]),
-            )
-            .expect("OpenAI payload")
-            .with_context(protocol_context),
+            ProtocolPayload::json_object("openai", body)
+                .expect("OpenAI payload")
+                .with_context(protocol_context),
         )
         .with_provider_session_state(
             ProviderSessionState::new("openai", session_state).expect("provider session state"),
@@ -6517,6 +6529,11 @@ async fn matching_turn_id_should_prefer_an_explicit_client_echo_over_saved_provi
         captured_header_values(&request, "x-codex-turn-state"),
         vec![b"client-turn-state".to_vec()]
     );
+    let body = captured_request_body(&request);
+    for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+        assert_eq!(body[key], "client-turn-state");
+        assert_eq!(body["client_metadata"][key], "client-turn-state");
+    }
 }
 
 #[tokio::test]
@@ -6528,12 +6545,17 @@ async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
             Some("turn-new"),
             Some("stale-client-turn-state"),
         ),
-        ("req_unidentified_turn_state", None, Some("turn-new"), None),
+        (
+            "req_unidentified_turn_state",
+            None,
+            Some("turn-new"),
+            Some("stale-client-turn-state"),
+        ),
         (
             "req_missing_current_turn_state",
             Some("turn-old"),
             None,
-            None,
+            Some("stale-client-turn-state"),
         ),
     ] {
         let request = capture_turn_state_request(
@@ -6544,6 +6566,16 @@ async fn new_or_unidentified_turn_should_not_restore_previous_turn_state() {
         )
         .await;
         assert!(captured_header_values(&request, "x-codex-turn-state").is_empty());
+        let body = captured_request_body(&request);
+        for key in ["turnState", "turn_state", "x-codex-turn-state"] {
+            assert!(body.get(key).is_none(), "stale body state: {key}");
+            assert!(
+                body["client_metadata"].get(key).is_none(),
+                "stale metadata state: {key}"
+            );
+        }
+        assert_eq!(body["input"][0]["content"][0]["text"], "current input");
+        assert_eq!(body["client_metadata"]["custom"], "preserved");
     }
 }
 

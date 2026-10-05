@@ -2083,3 +2083,108 @@ async fn codex_backend_client_should_discard_pooled_websocket_after_unknown_resp
     assert_eq!(second.websocket_pool_decision.unwrap().kind(), "new");
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 2);
 }
+
+#[tokio::test]
+async fn guardian_header_should_open_a_distinct_websocket() {
+    assert_changed_handshake_opens_distinct_websocket("x-codex-guardian", "reviewer").await;
+}
+
+#[tokio::test]
+async fn residency_profile_should_open_a_distinct_websocket() {
+    assert_changed_handshake_opens_distinct_websocket("x-openai-internal-codex-residency", "us")
+        .await;
+}
+
+async fn assert_changed_handshake_opens_distinct_websocket(
+    header: &'static str,
+    value: &'static str,
+) {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use gateway_core::operation::{GenerateRequest, ProtocolPayload};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut first = accept_codex_test_websocket(stream).await;
+        first.next().await.unwrap().unwrap();
+        first
+            .send(Message::Text(
+                completed_websocket_response("resp_regular", 1, 1).into(),
+            ))
+            .await
+            .unwrap();
+        tokio::select! {
+            message = first.next() => {
+                message.unwrap().unwrap();
+                first.send(Message::Text(completed_websocket_response("resp_guardian", 1, 1).into())).await.unwrap();
+                false
+            }
+            accepted = listener.accept() => {
+                let (stream, _) = accepted.unwrap();
+                let mut second = accept_codex_test_websocket_with(stream, |request, _| {
+                    assert_eq!(request.headers()[header], value);
+                }).await;
+                second.next().await.unwrap().unwrap();
+                second.send(Message::Text(completed_websocket_response("resp_guardian", 1, 1).into())).await.unwrap();
+                true
+            }
+        }
+    });
+    let pool = Arc::new(CodexWebSocketPool::new(Duration::from_mins(1)));
+    let backend = CodexBackendClient::new(
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+        format!("http://{addr}"),
+        test_wire_profile(),
+    )
+    .with_websocket_pool(pool.clone());
+    let make_request = |guardian| {
+        let body = json!({"model":"gpt-5.5", "input":"hello", "stream":true, "client_metadata": {"session_id":"shared-session"}}).as_object().unwrap().clone();
+        let headers = if guardian && header == "x-codex-guardian" {
+            json!([[header, STANDARD.encode(value)]])
+        } else {
+            json!([])
+        };
+        let payload = ProtocolPayload::json_object("openai", body)
+            .unwrap()
+            .with_context(Map::from_iter([
+                ("opaque_request_headers".into(), headers),
+                ("use_websocket".into(), json!(true)),
+            ]));
+        let mut request = provider_openai::encode_generate_request(
+            &GenerateRequest::from_protocol_payload(payload),
+            "gpt-5.5",
+            None,
+        )
+        .unwrap();
+        request.local_conversation_id = Some("guardian-shared-session".into());
+        request
+    };
+    backend
+        .create_response(
+            &make_request(false),
+            request_context("req_regular", Some("account")),
+        )
+        .await
+        .unwrap();
+    let backend = if header == "x-openai-internal-codex-residency" {
+        let mut profile = test_wire_profile().snapshot();
+        profile.residency = Some(provider_openai::transport::profile::CodexResidency::Us);
+        backend.with_request_profile(profile)
+    } else {
+        backend
+    };
+    let second = backend
+        .create_response(
+            &make_request(true),
+            request_context("req_guardian", Some("account")),
+        )
+        .await
+        .unwrap();
+    let fresh = server.await.unwrap();
+    pool.shutdown().await;
+    assert!(
+        fresh,
+        "changed {header} reused ordinary socket: {:?}",
+        second.websocket_pool_decision
+    );
+}

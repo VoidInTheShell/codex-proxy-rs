@@ -6,7 +6,8 @@
 use std::time::Instant;
 
 use bytes::Bytes;
-use reqwest::header::HeaderMap;
+use gateway_protocol::openai::is_transport_managed_request_header;
+use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 
 use super::{
     client::{
@@ -16,14 +17,34 @@ use super::{
     },
     diagnostics::{CodexUpstreamDiagnostics, CodexUpstreamSendPhase},
     endpoints::endpoint_url,
+    headers::is_managed_identity_header,
     response_meta,
 };
 
 impl CodexBackendClient {
+    /// Live 各端点共用画像与账号基线，不附加 Responses 的路由和续接字段
+    pub(crate) fn live_request_headers(
+        &self,
+        context: CodexRequestContext<'_>,
+        extra_protocol_headers: &[(String, String)],
+    ) -> CodexClientResult<HeaderMap> {
+        let mut headers = self.model_request_headers(&self.profile.snapshot(), context)?;
+        for (name, value) in extra_protocol_headers {
+            let name = HeaderName::from_bytes(name.as_bytes())?;
+            if is_managed_identity_header(name.as_str())
+                || is_transport_managed_request_header(name.as_str())
+            {
+                continue;
+            }
+            headers.append(name, HeaderValue::from_str(value)?);
+        }
+        Ok(headers)
+    }
+
     /// 向 Codex realtime calls 端点发送账号级 POST；请求与响应正文不经过 serde。
     ///
     /// `extra_protocol_headers` 是客户端协议头经过允许清单过滤后的结果，
-    /// 依次追加在标准账号头之后，遇到同名标准头时覆盖客户端语义字段。
+    /// 仅追加业务语义字段，身份与画像不能覆盖账号基线
     pub(crate) async fn post_live_call(
         &self,
         endpoint_path: &'static str,
@@ -63,18 +84,12 @@ impl CodexBackendClient {
         body: Bytes,
         context: CodexRequestContext<'_>,
     ) -> CodexClientResult<CodexLiveCallResponse> {
-        let profile = self.profile.snapshot();
-        let mut headers = self.model_request_headers(&profile, context)?;
+        let mut headers = self.live_request_headers(context, extra_protocol_headers)?;
         headers.insert(
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_str(content_type.unwrap_or("application/json"))?,
         );
         self.append_middleware_headers(&mut headers)?;
-        for (name, value) in extra_protocol_headers {
-            let name = reqwest::header::HeaderName::from_bytes(name.as_bytes())?;
-            let value = reqwest::header::HeaderValue::from_str(value)?;
-            headers.insert(name, value);
-        }
 
         let trace = context
             .trace

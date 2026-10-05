@@ -35,6 +35,8 @@ use crate::credential::{
     CODEX_AUTHENTICATION_KIND_OAUTH, CodexCredentialRepository,
     SelectCodexProviderEndpointCredential,
 };
+use crate::transport::headers::websocket_header_pairs;
+use crate::transport::profile::CodexWireProfile;
 use crate::transport::websocket::{connect_live_sideband, into_live_relay};
 use crate::transport::{CODEX_REALTIME_CALLS_PATH, CodexRequestContext};
 
@@ -77,6 +79,7 @@ impl LiveClaimError {
 
 struct LiveRegistryEntry {
     account_id: gateway_core::account::ProviderAccountId,
+    profile: CodexWireProfile,
     upstream_model: UpstreamModelId,
     client_api_key_id: ClientApiKeyId,
     expires_at: Instant,
@@ -104,6 +107,7 @@ impl CodexLiveRegistry {
         account_id: gateway_core::account::ProviderAccountId,
         client_api_key_id: ClientApiKeyId,
         upstream_model: UpstreamModelId,
+        profile: CodexWireProfile,
     ) {
         if !is_valid_call_id(call_id) {
             return;
@@ -114,6 +118,7 @@ impl CodexLiveRegistry {
             call_id.to_owned(),
             LiveRegistryEntry {
                 account_id,
+                profile,
                 upstream_model,
                 client_api_key_id,
                 expires_at: Instant::now() + LIVE_SESSION_TTL,
@@ -132,7 +137,7 @@ impl CodexLiveRegistry {
         call_id: &str,
         client_api_key_id: &ClientApiKeyId,
         account_scope: &FrozenAccountScope,
-    ) -> Result<gateway_core::account::ProviderAccountId, LiveClaimError> {
+    ) -> Result<(gateway_core::account::ProviderAccountId, CodexWireProfile), LiveClaimError> {
         if !is_valid_call_id(call_id) {
             return Err(LiveClaimError::Invalid);
         }
@@ -152,7 +157,7 @@ impl CodexLiveRegistry {
         entry.claimed = true;
         // 认领期间暂停过期；guard 释放时恢复计时。guard 覆盖全部退出路径，
         // 不存在认领后无法回收的窗口。
-        Ok(entry.account_id.clone())
+        Ok((entry.account_id.clone(), entry.profile.clone()))
     }
 
     /// 归还认领；由 [`LiveCallClaim`] 的 Drop 触发，过期计时恢复。
@@ -175,7 +180,7 @@ impl CodexLiveRegistry {
         &self,
         call_id: &str,
         client_api_key_id: &ClientApiKeyId,
-    ) -> Result<gateway_core::account::ProviderAccountId, LiveClaimError> {
+    ) -> Result<(gateway_core::account::ProviderAccountId, CodexWireProfile), LiveClaimError> {
         if !is_valid_call_id(call_id) {
             return Err(LiveClaimError::Invalid);
         }
@@ -187,7 +192,7 @@ impl CodexLiveRegistry {
         if &entry.client_api_key_id != client_api_key_id {
             return Err(LiveClaimError::OwnerMismatch);
         }
-        Ok(entry.account_id.clone())
+        Ok((entry.account_id.clone(), entry.profile.clone()))
     }
 }
 
@@ -389,9 +394,12 @@ struct ColdLiveCall {
 
 fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
     Box::pin(async_stream::try_stream! {
+        // 引导与后续通话共用首次画像，发布更新或 Key 配置变更只影响新通话
+        let profile = request.client.profile_state().snapshot();
+        let client = request.client.with_request_profile(profile.clone());
         let allows_account_state_mutation = request.lease.allows_account_state_mutation();
         let failure_context = OpenAiFailureContext {
-            client: &request.client,
+            client: &client,
             selector: &request.selector,
             quota: &request.quota,
             response_origin: &request.response_origin,
@@ -432,7 +440,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
             biased;
             _ = cancellation.cancelled() => Err(CodexHandshakeAttemptError::Cancelled),
             _ = deadline.wait() => Err(CodexHandshakeAttemptError::Timeout),
-            response = request.client.post_live_call(
+            response = client.post_live_call(
                 CODEX_REALTIME_CALLS_PATH,
                 request.endpoint_query.as_deref(),
                 request.content_type.as_deref(),
@@ -487,6 +495,7 @@ fn cold_live_call_stream(request: ColdLiveCall) -> EventStream {
                 active_account.id().clone(),
                 request.context.client_api_key_ref().clone(),
                 request.upstream_model.clone(),
+                profile,
             );
         } else {
             tracing::warn!(
@@ -629,7 +638,7 @@ impl LiveGateway for CodexLiveGateway {
         request: LiveSidebandRequest<'a>,
     ) -> BoxFuture<'a, Result<LiveRelay, LiveGatewayError>> {
         Box::pin(async move {
-            let account_id = self
+            let (account_id, profile) = self
                 .registry
                 .claim(
                     request.call_id,
@@ -649,11 +658,17 @@ impl LiveGateway for CodexLiveGateway {
                 ));
             }
             let endpoint = Self::sideband_endpoint(request.style, request.call_id);
-            let mut headers = vec![("authorization".to_owned(), authorization)];
-            if let Some(account_id) = account.upstream_account_id() {
-                headers.push(("chatgpt-account-id".to_owned(), account_id.to_owned()));
-            }
-            headers.extend(request.protocol_headers);
+            let client = self.client.clone().with_request_profile(profile);
+            let context = CodexRequestContext::auxiliary(
+                &authorization,
+                account.upstream_account_id(),
+                request.call_id,
+                None,
+            );
+            let headers = client
+                .live_request_headers(context, &request.protocol_headers)
+                .map_err(map_live_http_error)?;
+            let mut headers = websocket_header_pairs(&headers);
             if !request.subprotocols.is_empty() {
                 headers.push((
                     "sec-websocket-protocol".to_owned(),
@@ -686,7 +701,7 @@ impl LiveGateway for CodexLiveGateway {
         request: LiveHangupRequest<'a>,
     ) -> BoxFuture<'a, Result<LiveCallOutcome, LiveGatewayError>> {
         Box::pin(async move {
-            let account_id = self
+            let (account_id, profile) = self
                 .registry
                 .peek_owner(request.call_id, request.client_api_key_id)
                 .map_err(|claim_error| {
@@ -695,12 +710,17 @@ impl LiveGateway for CodexLiveGateway {
             let (account, authorization) = self.load_pinned_credential(&account_id).await?;
             // hangup 与引导同源：必须走钉住账号的出口代理与连接池，
             // 不能使用共享 client 直连发出。
-            let client = self.client.for_account(&account).map_err(|_| {
-                LiveGatewayError::new(
-                    LiveGatewayErrorKind::CredentialUnavailable,
-                    "codex live hangup account client is unavailable",
-                )
-            })?;
+            let client = self
+                .client
+                .clone()
+                .with_request_profile(profile)
+                .for_account(&account)
+                .map_err(|_| {
+                    LiveGatewayError::new(
+                        LiveGatewayErrorKind::CredentialUnavailable,
+                        "codex live hangup account client is unavailable",
+                    )
+                })?;
             let request_id = Uuid::new_v4().to_string();
             let mut context = CodexRequestContext::auxiliary(
                 authorization.as_str(),

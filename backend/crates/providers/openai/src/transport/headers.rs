@@ -35,6 +35,14 @@ pub(super) fn is_managed_identity_header(name: &str) -> bool {
             | "x-openai-fedramp"
             // 安装身份由当前账号写入 client_metadata，不继承下游安装头
             | "x-codex-installation-id"
+            // 画像和设备证明须属于选定账号，不能由下游覆盖
+            | "originator"
+            | "user-agent"
+            | "version"
+            | "x-openai-internal-codex-residency"
+            | "x-oai-attestation"
+            | "x-oai-is"
+            | "x-oai-is-update"
     )
 }
 
@@ -233,26 +241,18 @@ impl CodexBackendClient {
 fn append_passthrough_headers(headers: &mut HeaderMap, request: &CodexResponsesRequest) {
     for name in request.passthrough_headers.keys() {
         // 身份与传输字段只由画像/正文生成；其余协议头保留原始多值字节
-        if matches!(
-            name.as_str(),
-            "originator"
-                | "user-agent"
-                | "version"
-                | "authorization"
-                | "chatgpt-account-id"
-                | "cookie"
-                | "x-openai-internal-codex-residency"
-                | "openai-beta"
-                | "accept"
-                | "content-type"
-                | "content-encoding"
-                | "x-codex-routing-hint"
-                | "x-codex-turn-id"
-                | "x-oai-attestation"
-                | "x-oai-is"
-                | "x-oai-is-update"
-                | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
-        ) {
+        if is_managed_identity_header(name.as_str())
+            || matches!(
+                name.as_str(),
+                "openai-beta"
+                    | "accept"
+                    | "content-type"
+                    | "content-encoding"
+                    | "x-codex-routing-hint"
+                    | "x-codex-turn-id"
+                    | X_OPENAI_INTERNAL_CODEX_RESPONSES_LITE_HEADER
+            )
+        {
             continue;
         }
         headers.remove(name);
@@ -300,7 +300,7 @@ fn header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
         .collect()
 }
 
-pub(super) fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
+pub(crate) fn websocket_header_pairs(headers: &HeaderMap) -> Vec<(String, String)> {
     let mut pairs = header_pairs(headers);
     // WebSocket opening 的 HeaderMap 先由业务头构造，再被 tungstenite 插入协议头；
     // 这里复现官方 HeaderMap 交给 tungstenite 时的迭代顺序，最终序列化后的

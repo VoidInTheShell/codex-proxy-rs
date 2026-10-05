@@ -475,14 +475,18 @@ OpenAI 选号阶段确认本次可选账号全部额度耗尽时，HTTP 返回 `
 `session.model` 或顶层 `model` 中的 `gpt-realtime` 系模型名归一为 `gpt-live-1-codex`，其余模型原样透传；
 模型字段缺失时按默认语音模型参与检查。归一后的模型参与账号模型权限检查：账号范围整体禁止该模型时
 引导请求按路由错误拒绝，被禁账号不会服务语音通话。语音语义请求头按允许清单转发：`OpenAI-Alpha`、
-`X-Session-Id`、`Session-Id`、`Thread-Id`、`Originator`、`OpenAI-Safety-Identifier`、`OpenAI-Organization`、
-`OpenAI-Project`、`X-Oai-Attestation`；认证、账号身份等其余请求头一律不透传，上游账号身份由选中的账号提供。
+`X-Session-Id`、`Session-Id`、`Thread-Id`、`OpenAI-Safety-Identifier`；认证、组织、项目和设备证明等
+身份头不透传，上游账号身份由选中的账号提供
 
 引导响应透传上游状态码，并只回传 `Content-Type`、`Location`、`Retry-After`、`X-Request-Id`、
 `OpenAI-Request-Id` 五个响应头；正文按字节透传。sideband 中继不做协议解释：Text/Binary 帧双向透传，
 Ping 由网关本地应答，关闭帧保留原关闭码，异常中断投影为正常关闭。同一 call id 只允许一条 sideband，重复加入返回 `409`；
 非创建该通话的 Client Key 访问 sideband 或 hangup 返回 `403`；call id 未知或已过期返回 `404`。
 hangup 不受 sideband 占用限制，通话中可随时挂断；挂断与 sideband 都走钉住账号的出口代理。
+
+通话使用引导时解析的 Client Key 画像，sideband、重连和 hangup 复用同一画像；画像配置更新只影响新通话。
+后续连接与挂断读取钉住账号当前有效的凭据和代理配置
+
 call 与账号的绑定保存在网关进程内，未连接时一小时过期；sideband 占用期间暂停过期，断开后重新计时，
 客户端可重连加入同一通话。挂断成功或上游报告通话不存在时立即解除绑定。
 进程重启后未完成通话失去 sideband 与 hangup 能力

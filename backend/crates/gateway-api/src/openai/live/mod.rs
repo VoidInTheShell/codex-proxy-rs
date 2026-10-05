@@ -35,16 +35,12 @@ pub(crate) const LIVE_CALLS_ENDPOINT: &str = "realtime-calls";
 /// realtime calls 的官方查询参数；上游按 `architecture=avas` 返回 WebRTC answer。
 pub(crate) const LIVE_CALLS_QUERY: &str = "intent=quicksilver&architecture=avas";
 /// 客户端协议头允许清单；语音会话语义字段，转发给上游引导请求。
-pub(crate) const LIVE_PROTOCOL_HEADERS: [&str; 9] = [
+pub(crate) const LIVE_PROTOCOL_HEADERS: [&str; 5] = [
     "openai-alpha",
     "x-session-id",
     "session-id",
     "thread-id",
-    "originator",
     "openai-safety-identifier",
-    "openai-organization",
-    "openai-project",
-    "x-oai-attestation",
 ];
 
 pub(crate) fn router() -> Router<crate::ApiState> {

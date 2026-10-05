@@ -322,3 +322,44 @@ async fn live_post_only_accepts_declared_methods() {
         .expect("route live put request");
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+#[tokio::test]
+async fn live_should_strip_downstream_identity_headers() {
+    let capture = LiveCapture::new();
+    api_router(Arc::clone(&capture) as Arc<dyn ExecutionService>)
+        .await
+        .oneshot(
+            Request::post("/v1/live")
+                .header(AUTHORIZATION, format!("Bearer {LIVE_KEY}"))
+                .header("content-type", "application/json")
+                .header("originator", "downstream-client")
+                .header("openai-organization", "downstream-org")
+                .header("openai-project", "downstream-project")
+                .header("x-oai-attestation", "downstream-attestation")
+                .body(Body::from(json!({"sdp":"v=0"}).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (Operation::ProviderHttp(request), _) = capture.operation().unwrap() else {
+        panic!("operation");
+    };
+    let leaked: Vec<_> = request
+        .headers()
+        .iter()
+        .map(|h| h.name())
+        .filter(|h| {
+            [
+                "originator",
+                "openai-organization",
+                "openai-project",
+                "x-oai-attestation",
+            ]
+            .contains(h)
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "downstream identity headers reach upstream operation: {leaked:?}"
+    );
+}

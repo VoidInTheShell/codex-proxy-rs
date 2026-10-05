@@ -84,7 +84,7 @@ use crate::transport::protocol::websocket::{
 };
 use crate::transport::request::{
     CodexRequestEncodeError, RequestAccountScope, align_structured_location_fields,
-    encode_generate_request, scope_request_to_account,
+    clear_request_turn_state, encode_generate_request, scope_request_to_account,
 };
 use crate::transport::session::CodexSessionIdentity;
 use crate::transport::usage::normalize_service_tier;
@@ -202,17 +202,17 @@ impl CodexProvider {
             identity.prepare_local_conversation(&mut upstream);
         }
         if let Some(previous_session) = previous_session.as_ref() {
-            upstream.turn_state = if same_client_turn(
+            if same_client_turn(
                 previous_session.client_turn_id.as_deref(),
                 upstream.client_turn_id.as_deref(),
             ) {
-                upstream
+                upstream.turn_state = upstream
                     .turn_state
                     .take()
-                    .or_else(|| previous_session.turn_state.clone())
+                    .or_else(|| previous_session.turn_state.clone());
             } else {
-                None
-            };
+                clear_request_turn_state(&mut upstream);
+            }
         }
         let session_affinity =
             derive_codex_session_affinity(&upstream, context.client_api_key_ref());

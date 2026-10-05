@@ -56,10 +56,9 @@ const CROSS_ACCOUNT_IDENTITY_KEYS: &[&str] = &[
     "cf_clearance",
 ];
 
+const TURN_STATE_KEYS: &[&str] = &["turnState", "turn_state", "x-codex-turn-state"];
+
 const ACCOUNT_BOUND_STATE_KEYS: &[&str] = &[
-    "turnState",
-    "turn_state",
-    "x-codex-turn-state",
     "previous_response_id",
     "previousResponseId",
     "response_id",
@@ -450,6 +449,20 @@ fn normalize_conversation_anchor_text(text: &str) -> String {
     rest.to_owned()
 }
 
+/// 新 turn 不得沿用上一轮的路由 token，各 wire 入口须同步清理
+pub(crate) fn clear_request_turn_state(request: &mut CodexResponsesRequest) {
+    request.turn_state = None;
+    request.passthrough_headers.remove("x-codex-turn-state");
+    for key in TURN_STATE_KEYS {
+        request.body_mut().remove(*key);
+    }
+    if let Some(Value::Object(metadata)) = request.body_mut().get_mut("client_metadata") {
+        for key in TURN_STATE_KEYS {
+            metadata.remove(*key);
+        }
+    }
+}
+
 /// 把客户端正文收敛到当前 lease 的账号身份边界
 ///
 /// 真实 account ID 由随后构造的 `CodexRequestContext` 注入请求头；installation ID
@@ -486,6 +499,7 @@ pub(crate) fn scope_request_to_account(
         request.passthrough_headers.remove("x-codex-turn-metadata");
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
+            .chain(TURN_STATE_KEYS)
             .chain(ACCOUNT_BOUND_STATE_KEYS)
         {
             request.body_mut().remove(*key);
@@ -533,6 +547,7 @@ pub(crate) fn scope_request_to_account(
             if reset_account_state {
                 for key in CROSS_ACCOUNT_IDENTITY_KEYS
                     .iter()
+                    .chain(TURN_STATE_KEYS)
                     .chain(ACCOUNT_BOUND_STATE_KEYS)
                 {
                     metadata.remove(*key);
@@ -597,6 +612,7 @@ pub(crate) fn scope_turn_metadata(
     if cross_account {
         for key in CROSS_ACCOUNT_IDENTITY_KEYS
             .iter()
+            .chain(TURN_STATE_KEYS)
             .chain(ACCOUNT_BOUND_STATE_KEYS)
             .chain(TURN_METADATA_KEYS)
         {
