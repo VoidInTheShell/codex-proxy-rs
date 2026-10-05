@@ -93,13 +93,13 @@ const inspected = shallowRef<OutboundProxyRecord | null>(null)
                   {{ row.lastTest.exitIpv6 }}
                 </span>
               </div>
-              <div v-else-if="row.lastTest?.exitIpv4" class="font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
+              <div v-else-if="row.lastTest?.exitIpv4" class="truncate font-mono text-cp-xs" :title="`IPv4: ${row.lastTest.exitIpv4}`">
                 {{ row.lastTest.exitIpv4 }}
               </div>
-              <div v-else-if="row.lastTest?.exitIpv6" class="font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
+              <div v-else-if="row.lastTest?.exitIpv6" class="truncate font-mono text-cp-xs" :title="`IPv6: ${row.lastTest.exitIpv6}`">
                 {{ row.lastTest.exitIpv6 }}
               </div>
-              <span v-else-if="row.lastTest?.exitIp" class="break-all font-mono text-cp-xs">{{ row.lastTest.exitIp }}</span>
+              <span v-else-if="row.lastTest?.exitIp" class="block truncate font-mono text-cp-xs" :title="row.lastTest.exitIp">{{ row.lastTest.exitIp }}</span>
               <span v-else class="text-cp-text-quaternary">-</span>
             </template>
             <template #latency="{ row }">
