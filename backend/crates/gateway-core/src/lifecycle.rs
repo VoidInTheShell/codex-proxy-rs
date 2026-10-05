@@ -1,19 +1,17 @@
 //! 请求与连接的截止、租约、取消和 drain 契约。
 
 use std::fmt;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 
-use futures::{
-    channel::oneshot,
-    future::{BoxFuture, pending},
-};
+use event_listener::Event;
+use futures::future::{BoxFuture, pending};
 use futures_timer::Delay;
 
 struct CancellationState {
     cancelled: AtomicBool,
-    waiters: Mutex<Vec<oneshot::Sender<()>>>,
+    event: Event,
 }
 
 /// 可克隆的请求、任务与连接取消信号。
@@ -44,7 +42,7 @@ impl CancellationToken {
         Self {
             state: Arc::new(CancellationState {
                 cancelled: AtomicBool::new(false),
-                waiters: Mutex::new(Vec::new()),
+                event: Event::new(),
             }),
             ancestors: Arc::from([]),
         }
@@ -59,7 +57,7 @@ impl CancellationToken {
         Self {
             state: Arc::new(CancellationState {
                 cancelled: AtomicBool::new(false),
-                waiters: Mutex::new(Vec::new()),
+                event: Event::new(),
             }),
             ancestors: ancestors.into(),
         }
@@ -69,13 +67,7 @@ impl CancellationToken {
         if self.state.cancelled.swap(true, Ordering::AcqRel) {
             return;
         }
-        let waiters = {
-            let mut guard = lock_unpoisoned(&self.state.waiters);
-            std::mem::take(&mut *guard)
-        };
-        for waiter in waiters {
-            let _ = waiter.send(());
-        }
+        self.state.event.notify(usize::MAX);
     }
 
     #[must_use]
@@ -103,22 +95,14 @@ fn wait_for_state(state: Arc<CancellationState>) -> BoxFuture<'static, ()> {
         if state.cancelled.load(Ordering::Acquire) {
             return;
         }
-        let (sender, receiver) = oneshot::channel();
-        {
-            let mut waiters = lock_unpoisoned(&state.waiters);
-            if state.cancelled.load(Ordering::Acquire) {
-                return;
-            }
-            waiters.push(sender);
+        // listener 随等待 future 丢弃而注销，避免 select 败选分支在自身及祖先状态中积累。
+        let listener = state.event.listen();
+        // 注册后复查，覆盖取消发生在首次检查与注册之间的竞态。
+        if state.cancelled.load(Ordering::Acquire) {
+            return;
         }
-        let _ = receiver.await;
+        listener.await;
     })
-}
-
-fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// 进程已进入 drain，新连接不得再注册。
