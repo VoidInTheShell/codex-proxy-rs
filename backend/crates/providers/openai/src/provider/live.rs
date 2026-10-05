@@ -243,13 +243,15 @@ impl CodexProvider {
                 UpstreamSendState::NotSent,
             )
         })?;
+        let session_affinity =
+            derive_live_session_affinity(&request, &[], context.client_api_key_ref());
         let selection_started_at = Instant::now();
         let lease = self
             .selector
             .select_for_provider_endpoint(&SelectCodexProviderEndpointCredential {
                 request_url: &self.live_calls_url,
                 attempt: &context,
-                session_affinity: None,
+                session_affinity: session_affinity.as_ref(),
                 upstream_model: Some(upstream_model.as_str()),
                 // realtime calls 端点绑定 ChatGPT OAuth 身份；在候选阶段就排除
                 // API Key 账号，避免混合账号池选中不支持语音的账号后必然失败。
@@ -266,7 +268,6 @@ impl CodexProvider {
         }
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let lease = Arc::new(lease);
         let operation = Operation::ProviderHttp(request);
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
@@ -303,7 +304,7 @@ impl CodexProvider {
         operation: Operation,
         upstream_model: UpstreamModelId,
         middleware_headers: Vec<MiddlewareHeader>,
-        lease: Arc<CodexCredentialLease>,
+        mut lease: CodexCredentialLease,
         account_selection_wait_ms: u64,
     ) -> Result<ProviderStream, ProviderError> {
         let Operation::ProviderHttp(request) = operation else {
@@ -312,6 +313,18 @@ impl CodexProvider {
                 UpstreamSendState::NotSent,
             ));
         };
+        let session_affinity = derive_live_session_affinity(
+            &request,
+            &middleware_headers,
+            context.client_api_key_ref(),
+        );
+        if !context.is_diagnostic_required_account() {
+            self.selector
+                .validate_translated_selection(&mut lease, session_affinity.as_ref(), None)
+                .await
+                .map_err(map_selection_error)?;
+        }
+        let lease = Arc::new(lease);
         let allows_account_state_mutation = lease.allows_account_state_mutation();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;

@@ -1102,9 +1102,9 @@ where
                 Ok(stream) => stream,
                 Err(error) => {
                     record_trace_error(&attempt_trace, &error);
-                    let continuation_retry =
-                        self.prepare_unavailable_native_continuation_replay(&error);
-                    let candidate_retry = !continuation_retry
+                    let continuation_retry = !error.retry_is_prohibited()
+                        && self.prepare_unavailable_native_continuation_replay(&error);
+                    let candidate_retry = !error.retry_is_prohibited() && !continuation_retry
                         && matches!(
                             error.kind(),
                             ProviderErrorKind::AccountCapacityUnavailable

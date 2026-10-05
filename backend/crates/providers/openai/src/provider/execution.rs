@@ -3,6 +3,7 @@
 use gateway_core::metering::{CalculatedCost, Usage};
 
 use super::*;
+use gateway_core::operation::RawJsonPayload;
 
 impl CodexProvider {
     pub(super) async fn execute_image(
@@ -30,11 +31,9 @@ impl CodexProvider {
             .get("image_turn_id")
             .and_then(Value::as_str)
             .map(str::to_owned);
-        let session_affinity = derive_codex_endpoint_session_affinity(
-            image.payload(),
-            context.client_api_key_ref(),
-            "session_id",
-        );
+        let session_affinity = self
+            .image_session_affinity(image.payload(), &[], &context)
+            .await?;
         self.execute_raw_json_endpoint(
             context,
             RawJsonEndpointRequest {
@@ -48,6 +47,60 @@ impl CodexProvider {
             },
         )
         .await
+    }
+
+    async fn image_session_affinity(
+        &self,
+        payload: &RawJsonPayload,
+        headers: &[MiddlewareHeader],
+        context: &AttemptContext,
+    ) -> Result<Option<CodexSessionAffinity>, ProviderError> {
+        if context.is_diagnostic_required_account() {
+            return Ok(None);
+        }
+        let explicit = derive_endpoint_affinity_with_headers(
+            payload,
+            context.client_api_key_ref(),
+            "session_id",
+            headers,
+        );
+        let turn = headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case("x-codex-image-turn-id"))
+            .and_then(|header| std::str::from_utf8(header.value()).ok())
+            .or_else(|| {
+                payload
+                    .context()
+                    .get("image_turn_id")
+                    .and_then(Value::as_str)
+            });
+        let inferred = if let Some(alias) =
+            turn.and_then(|turn| derive_turn_alias(turn, context.client_api_key_ref()))
+        {
+            self.selector
+                .session_for_turn(&alias)
+                .await
+                .map_err(map_selection_error)?
+        } else {
+            None
+        };
+        if explicit
+            .as_ref()
+            .zip(inferred.as_ref())
+            .is_some_and(|(explicit, inferred)| explicit.key() != inferred.key())
+        {
+            return Err(provider_error(
+                ProviderErrorKind::InvalidRequest,
+                UpstreamSendState::NotSent,
+            )
+            .with_retry_prohibited());
+        }
+        let follow_only = inferred
+            .as_ref()
+            .is_some_and(CodexSessionAffinity::follow_only);
+        Ok(explicit
+            .or(inferred)
+            .map(|affinity| affinity.with_follow_only(follow_only)))
     }
 
     pub(super) async fn execute_search(
@@ -109,7 +162,6 @@ impl CodexProvider {
             .map_err(map_selection_error)?;
         let account_selection_wait_ms =
             u64::try_from(selection_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
-        let lease = Arc::new(lease);
         let operation = request.operation.clone();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
@@ -146,9 +198,29 @@ impl CodexProvider {
         operation: Operation,
         middleware_headers: Vec<MiddlewareHeader>,
         mut request: RawJsonEndpointRequest,
-        lease: Arc<CodexCredentialLease>,
+        mut lease: CodexCredentialLease,
         account_selection_wait_ms: u64,
     ) -> Result<ProviderStream, ProviderError> {
+        let affinity = match &operation {
+            Operation::GenerateImage(image) => {
+                self.image_session_affinity(image.payload(), &middleware_headers, &context)
+                    .await?
+            }
+            Operation::Search(search) => derive_endpoint_affinity_with_headers(
+                search.payload(),
+                context.client_api_key_ref(),
+                "id",
+                &middleware_headers,
+            ),
+            _ => None,
+        };
+        if !context.is_diagnostic_required_account() {
+            self.selector
+                .validate_translated_selection(&mut lease, affinity.as_ref(), None)
+                .await
+                .map_err(map_selection_error)?;
+        }
+        let lease = Arc::new(lease);
         match operation {
             Operation::GenerateImage(image) => {
                 let Operation::GenerateImage(original) = &request.operation else {
@@ -233,7 +305,6 @@ impl CodexProvider {
             quota: Arc::clone(&self.quota),
             lease: Arc::clone(&lease),
             output_started_at: Instant::now(),
-            session_affinity_key: request.session_affinity.map(CodexSessionAffinity::into_key),
         });
         let stream = ProviderStream::new(metadata, events, lease);
         Ok(if allows_account_state_mutation {
@@ -269,8 +340,8 @@ pub(super) struct ColdResponse {
     pub(super) catalog: Arc<CodexCredentialCatalogService>,
     pub(super) lease: Arc<CodexCredentialLease>,
     pub(super) output_started_at: Instant,
-    pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
-    pub(super) session_affinity_key_hash: Option<String>,
+    pub(super) session_transport_key: Option<ProviderSessionAffinityKey>,
+    pub(super) session_transport_key_hash: Option<String>,
     pub(super) session_transport_recovery: CodexSessionTransportRecovery,
     pub(super) websocket_retry_count: u32,
     pub(super) stream_max_retries: u32,
@@ -289,7 +360,6 @@ pub(super) struct ColdJsonResponse {
     pub(super) quota: Arc<CodexCredentialQuotaService>,
     pub(super) lease: Arc<CodexCredentialLease>,
     pub(super) output_started_at: Instant,
-    pub(super) session_affinity_key: Option<ProviderSessionAffinityKey>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -546,14 +616,6 @@ pub(super) fn cold_json_response_stream(request: ColdJsonResponse) -> EventStrea
             }
         };
 
-        if allows_account_state_mutation && let Some(key) = request.session_affinity_key.as_ref() {
-            // JSON 已完整接收；在首个 yield 前提交亲和迁移，避免下游取消漏掉更新
-            request.selector.update_session_affinity(
-                key,
-                request.lease.affinity_expected_account_id(),
-                active_account.id(),
-            ).await;
-        }
         let mut metrics = response.transport_metrics.clone();
         metrics.first_event_ms = Some(
             i64::try_from(request.output_started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -659,8 +721,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
         catalog,
         lease,
         output_started_at,
-        session_affinity_key,
-        session_affinity_key_hash,
+        session_transport_key,
+        session_transport_key_hash,
         session_transport_recovery,
         websocket_retry_count,
         stream_max_retries,
@@ -744,8 +806,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                             request_id: context.request_id().as_str(),
                             attempt_index: context.attempt_index().get(),
                             account_id: active_account.id().as_str(),
-                            session_affinity_key: session_affinity_key.as_ref(),
-                            session_affinity_key_hash: session_affinity_key_hash.as_deref(),
+                            session_transport_key: session_transport_key.as_ref(),
+                            session_transport_key_hash: session_transport_key_hash.as_deref(),
                             session_transport_recovery: &session_transport_recovery,
                         },
                     );
@@ -928,8 +990,8 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                                 request_id: context.request_id().as_str(),
                                 attempt_index: context.attempt_index().get(),
                                 account_id: active_account.id().as_str(),
-                                session_affinity_key: session_affinity_key.as_ref(),
-                                session_affinity_key_hash: session_affinity_key_hash.as_deref(),
+                                session_transport_key: session_transport_key.as_ref(),
+                                session_transport_key_hash: session_transport_key_hash.as_deref(),
                                 session_transport_recovery: &session_transport_recovery,
                             },
                         );
@@ -1022,7 +1084,7 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
                 && observation_state.mark_completed(terminal_response_is_incomplete(&events));
             if response_transport == CodexBackendTransport::WebSocket
                 && completed && terminal_failure.is_none()
-                && let Some(key) = session_affinity_key.as_ref()
+                && let Some(key) = session_transport_key.as_ref()
             {
                 session_transport_recovery.websocket_succeeded(key);
             }
@@ -1040,14 +1102,9 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             }
             attach_openai_session_update(&mut events, &mut session_capture);
             if allows_account_state_mutation && completed && terminal_failure.is_none() {
-                // 完成事件一旦交给下游，Core 可以立刻停止轮询 Provider stream；
-                // 在此之前持久化亲和关系，保证成功请求不会因流被提前 drop 而丢失绑定
+                // 完成事实交给下游前更新账号健康，绑定已经在发送前完成
                 selector
-                    .record_success(
-                        &active_account,
-                        session_affinity_key.as_ref(),
-                        lease.affinity_expected_account_id(),
-                    )
+                    .record_success(&active_account)
                     .await;
                 selector
                     .observe_cyber_policy_success(cyber_policy_scope.as_ref())
@@ -1167,18 +1224,14 @@ pub(super) fn cold_response_stream(response: ColdResponse) -> EventStream {
             && observation_state.mark_completed(terminal_response_is_incomplete(&events));
         if response_transport == CodexBackendTransport::WebSocket
             && completed && terminal_failure.is_none()
-            && let Some(key) = session_affinity_key.as_ref()
+            && let Some(key) = session_transport_key.as_ref()
         {
             session_transport_recovery.websocket_succeeded(key);
         }
         if allows_account_state_mutation && completed && terminal_failure.is_none() {
-            // 同上：尾部 finish() 也可能产出 completed，亲和记录必须先于任何下游 yield
+            // 尾部 finish() 也可能产出 completed，账号健康更新先于下游 yield
             selector
-                .record_success(
-                    &active_account,
-                    session_affinity_key.as_ref(),
-                    lease.affinity_expected_account_id(),
-                )
+                .record_success(&active_account)
                 .await;
             selector
                 .observe_cyber_policy_success(cyber_policy_scope.as_ref())

@@ -59,8 +59,11 @@ use crate::credential::{
     CodexCredentialRefreshService, CodexCredentialRepository, CodexCredentialSelector,
     CodexCyberPolicyScope, CodexQuotaRefreshPolicy, CodexSessionAffinity, CredentialSelectionError,
     RuntimeCodexCookie, SelectCodexCredential, SelectCodexProviderEndpointCredential,
-    derive_codex_cyber_policy_session_key, derive_codex_endpoint_session_affinity,
-    derive_codex_session_affinity, derive_previous_response_id_hash,
+    account_session_with_headers, derive_codex_cyber_policy_session_key,
+    derive_codex_endpoint_session_affinity, derive_codex_session_affinity,
+    derive_codex_transport_key, derive_endpoint_affinity_with_headers,
+    derive_live_session_affinity, derive_previous_response_id_hash, derive_turn_alias,
+    turn_id_with_headers,
 };
 use crate::session_transport::CodexSessionTransportRecovery;
 use crate::transport::canonical::{
@@ -177,8 +180,6 @@ struct PreparedGenerateRequest {
 
 struct SelectedGenerate {
     lease: CodexCredentialLease,
-    session_affinity: Option<CodexSessionAffinity>,
-    cyber_policy_key: Option<ProviderSessionAffinityKey>,
     account_selection_wait_ms: u64,
     frozen_requirements: CapabilityRequirements,
 }
@@ -650,8 +651,6 @@ impl Provider for CodexProvider {
                                 terminal_context,
                                 SelectedGenerate {
                                     lease,
-                                    session_affinity: selection_session_affinity,
-                                    cyber_policy_key: selection_cyber_policy_key,
                                     account_selection_wait_ms,
                                     frozen_requirements,
                                 },
@@ -675,8 +674,6 @@ impl CodexProvider {
     ) -> Result<ProviderStream, ProviderError> {
         let SelectedGenerate {
             mut lease,
-            session_affinity: selection_session_affinity,
-            cyber_policy_key: selection_cyber_policy_key,
             account_selection_wait_ms,
             frozen_requirements,
         } = selected;
@@ -695,26 +692,47 @@ impl CodexProvider {
             ));
         }
         validate_openai_reasoning(generate.protocol_payload().body())?;
-        let upstream = encode_generate_request(&generate, upstream_model.as_str(), None)
+        let mut upstream = encode_generate_request(&generate, upstream_model.as_str(), None)
             .map_err(map_request_error)?;
+        upstream.client_account_follow_only = crate::credential::follows_session_with_headers(
+            generate.protocol_payload().body(),
+            generate.protocol_payload().context(),
+            &middleware_headers,
+        );
+        upstream.client_account_session_id = account_session_with_headers(
+            generate.protocol_payload().body(),
+            generate.protocol_payload().context(),
+            &middleware_headers,
+        );
         let processed = self.prepare_generate_request(&generate, upstream, &context);
         let mut upstream_request = processed.upstream;
+        let session_transport_key =
+            derive_codex_transport_key(&upstream_request, context.client_api_key_ref());
         let previous_session = processed.previous_session;
         let continuation_requested = processed.continuation_requested;
         let session_affinity = processed.session_affinity;
         let cyber_policy_session_key = processed.cyber_policy_session_key;
-        if selection_session_affinity
-            .as_ref()
-            .map(|affinity| affinity.key())
-            != session_affinity.as_ref().map(|affinity| affinity.key())
-            || selection_cyber_policy_key.as_ref() != cyber_policy_session_key.as_ref()
-        {
+        if !context.is_diagnostic_required_account() {
             self.selector
                 .validate_translated_selection(
                     &mut lease,
                     session_affinity.as_ref(),
                     cyber_policy_session_key.as_ref(),
                 )
+                .await
+                .map_err(map_selection_error)?;
+        }
+        if !context.is_diagnostic_required_account()
+            && let Some(affinity) = session_affinity.as_ref()
+            && let Some(turn) = turn_id_with_headers(
+                generate.protocol_payload().body(),
+                generate.protocol_payload().context(),
+                &middleware_headers,
+            )
+            .and_then(|turn| derive_turn_alias(&turn, context.client_api_key_ref()))
+        {
+            self.selector
+                .remember_turn(&turn, affinity)
                 .await
                 .map_err(map_selection_error)?;
         }
@@ -729,18 +747,22 @@ impl CodexProvider {
         let output_started_at = Instant::now();
         let provider_kind = ProviderKind::new(PROVIDER_NAME)
             .map_err(|_| provider_error(ProviderErrorKind::Protocol, UpstreamSendState::NotSent))?;
-        let state_owner_cross_account = context
-            .account_state_owner()
+        let native_owner = context.continuation().and_then(ContinuationBinding::pinned);
+        let state_owner_cross_account = native_owner
             .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
+            || context
+                .account_state_owner()
+                .is_some_and(|owner| !owner.matches(&provider_kind, lease.account_id()))
             || previous_session
                 .as_ref()
                 .is_some_and(|state| state.account_id != lease.account_id().as_str());
-        let has_explicit_state_owner =
-            context.account_state_owner().is_some() || previous_session.is_some();
+        let has_explicit_state_owner = context.account_state_owner().is_some()
+            || previous_session.is_some()
+            || native_owner.is_some();
         let account_scope =
             if state_owner_cross_account || (!has_explicit_state_owner && lease.account_switch()) {
                 RequestAccountScope::Different
-            } else if has_explicit_state_owner || lease.affinity_hit() {
+            } else if has_explicit_state_owner {
                 RequestAccountScope::Same
             } else {
                 RequestAccountScope::Unknown
@@ -864,9 +886,9 @@ impl CodexProvider {
             selected_transport(&upstream_request)
         };
         let session_http_fallback = requirement.allows_pre_send_http_fallback()
-            && session_affinity
+            && session_transport_key
                 .as_ref()
-                .is_some_and(|affinity| self.session_transport_recovery.uses_http(affinity.key()));
+                .is_some_and(|key| self.session_transport_recovery.uses_http(key));
         let mut transport = if requirement.requires_websocket() {
             CodexProviderTransport::PreferWebSocket
         } else if context.transport() == AttemptTransport::Fallback || session_http_fallback {
@@ -952,10 +974,9 @@ impl CodexProvider {
                 continuation_scope: None,
             });
         let allows_account_state_mutation = lease.allows_account_state_mutation();
-        let session_affinity_key_hash = session_affinity
+        let session_transport_key_hash = session_transport_key
             .as_ref()
-            .map(|affinity| affinity.key_hash().to_owned());
-        let session_affinity_key = session_affinity.map(CodexSessionAffinity::into_key);
+            .map(|key| key.expose_to_store().chars().take(12).collect());
         let websocket_retry_count = match context.transport() {
             AttemptTransport::Retry(retry_index) => retry_index.get(),
             AttemptTransport::Default | AttemptTransport::Fallback => 0,
@@ -981,8 +1002,8 @@ impl CodexProvider {
             catalog: Arc::clone(&self.catalog),
             lease: Arc::clone(&lease),
             output_started_at,
-            session_affinity_key,
-            session_affinity_key_hash,
+            session_transport_key,
+            session_transport_key_hash,
             session_transport_recovery: self.session_transport_recovery.clone(),
             websocket_retry_count,
             stream_max_retries: self.stream_max_retries,

@@ -4,6 +4,7 @@ mod account_isolation;
 mod capacity;
 mod precommit;
 mod response_interrupt;
+mod session_binding;
 mod upstream_adapter;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -272,7 +273,7 @@ async fn native_openai_claims_translated_session_affinity_before_send() {
         )
         .unwrap()
         .with_context(Map::from_iter([
-            ("conversation_id".to_owned(), json!("translated-session")),
+            ("session_id".to_owned(), json!("translated-session")),
             ("use_websocket".to_owned(), json!(false)),
         ])),
     ));
@@ -1073,7 +1074,7 @@ fn provider_with_affinity_and_base_url(
     )
 }
 
-fn provider_with_affinity_and_base_url_and_leases(
+pub(super) fn provider_with_affinity_and_base_url_and_leases(
     store: &Arc<MemoryAccountStore>,
     session_affinity: Arc<MemorySessionAffinity>,
     base_url: String,
@@ -1200,7 +1201,7 @@ fn generate_operation() -> Operation {
     ))
 }
 
-fn generate_with_session_context(
+pub(super) fn generate_with_session_context(
     session_id: &str,
     thread_id: Option<&str>,
     turn_metadata: Option<&str>,
@@ -1227,7 +1228,12 @@ fn generate_with_persisted_session_context(
     session_id: &str,
     thread_id: &str,
 ) -> GenerateRequest {
-    generate_with_session_context(session_id, Some(thread_id), None).with_provider_session_state(
+    // 传输测试独立运行根线程；session-id 保留为缓存路由身份，正文给出逻辑根线程身份
+    let request = generate_with_session_context(thread_id, Some(thread_id), None);
+    GenerateRequest::from_protocol_payload(request.protocol_payload().clone().with_context(
+        Map::from_iter([("session_id".to_owned(), json!(session_id))]),
+    ))
+    .with_provider_session_state(
         ProviderSessionState::new(
             "openai",
             Map::from_iter([
@@ -1253,7 +1259,7 @@ fn http_generate_operation() -> Operation {
     Operation::Generate(GenerateRequest::from_protocol_payload(payload))
 }
 
-fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest {
+pub(super) fn planned_request(provider_name: &str, operation: Operation) -> ProviderRequest {
     planned_request_for_model(provider_name, operation, "gpt-5.4")
 }
 
@@ -3098,12 +3104,12 @@ async fn image_endpoint_returns_the_exact_upstream_error_response() {
 }
 
 #[tokio::test]
-async fn search_and_images_should_share_responses_affinity_and_existing_busy_failover() {
+async fn search_and_images_share_responses_account_migration() {
     assert_cross_endpoint_affinity(None).await;
 }
 
 #[tokio::test]
-async fn child_search_and_images_should_share_child_failover_without_changing_the_root() {
+async fn child_search_and_images_share_the_root_binding() {
     assert_cross_endpoint_affinity(Some("child-thread")).await;
 }
 
@@ -3213,13 +3219,38 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
         .lock()
         .expect("busy accounts")
         .insert(first_account.clone());
-    let mut fallback = Arc::clone(&provider)
-        .execute(
-            planned_provider_endpoint_request("openai", search),
-            context("req_cross_endpoint_busy", CancellationToken::new()),
-        )
-        .await
-        .expect("busy fallback");
+    let fallback_request = Arc::clone(&provider);
+    let mut waiting = Box::pin(fallback_request.execute(
+        planned_provider_endpoint_request("openai", search.clone()),
+        context("req_cross_endpoint_waiting_child", CancellationToken::new()),
+    ));
+    if thread_id.is_some() {
+        assert!(futures::FutureExt::now_or_never(waiting.as_mut()).is_none());
+        drop(
+            provider
+                .clone()
+                .execute(
+                    planned_request("openai", root.clone()),
+                    context(
+                        "req_cross_endpoint_root_migration",
+                        CancellationToken::new(),
+                    ),
+                )
+                .await
+                .unwrap(),
+        );
+    }
+    let mut fallback = if thread_id.is_some() {
+        waiting.await.unwrap()
+    } else {
+        Arc::clone(&provider)
+            .execute(
+                planned_provider_endpoint_request("openai", search),
+                context("req_cross_endpoint_busy", CancellationToken::new()),
+            )
+            .await
+            .expect("busy fallback")
+    };
     assert_eq!(
         fallback.metadata().provider_account_id().as_str(),
         other_account
@@ -3299,9 +3330,16 @@ async fn assert_cross_endpoint_affinity(thread_id: Option<&str>) {
             )
             .await
             .expect("root after child migration");
-        assert_eq!(root_stream.metadata().provider_account_id(), &root_account);
+        assert_eq!(
+            root_stream.metadata().provider_account_id().as_str(),
+            other_account
+        );
         drop(root_stream);
-        assert_eq!(affinity.binding_count(), 2, "only root and child bindings");
+        assert_eq!(
+            affinity.binding_count(),
+            1,
+            "root and child share one binding"
+        );
     } else {
         let keys = affinity.lookup_keys();
         assert!(
@@ -3367,7 +3405,21 @@ async fn standalone_search_preserves_wire_and_scopes_turn_metadata_to_the_select
             json!(turn_metadata),
         )]));
     let operation = Operation::Search(StandaloneSearchRequest::from_raw_json(payload));
-    let mut stream = provider_with_base_url(&store, server.uri())
+    let provider = provider_with_base_url(&store, server.uri());
+    drop(
+        provider
+            .clone()
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(generate_with_session_context("session", None, None)),
+                ),
+                context("req_seed_search_root", CancellationToken::new()),
+            )
+            .await
+            .unwrap(),
+    );
+    let mut stream = provider
         .execute(
             planned_provider_endpoint_request("openai", operation),
             context("req_search_contract", CancellationToken::new()),
@@ -4573,7 +4625,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
     let continuation_operation = Operation::Generate(
         generate_with_session_context(
             "sticky-websocket-session",
-            Some("thread-continuation"),
+            Some("sticky-websocket-session"),
             None,
         )
         .with_provider_session_state(recovered_session),
@@ -4603,7 +4655,7 @@ async fn ambiguous_websocket_close_reconnects_and_retains_native_continuation() 
 
     let other_operation = Operation::Generate(generate_with_session_context(
         "other-websocket-session",
-        Some("thread-first"),
+        Some("other-websocket-session"),
         None,
     ));
     let mut other_stream = Arc::clone(&provider)
@@ -4806,7 +4858,7 @@ async fn websocket_upgrade_required_immediately_enables_session_http_fallback() 
     let operation = || {
         Operation::Generate(generate_with_session_context(
             "sticky-websocket-session",
-            Some("thread-first"),
+            Some("sticky-websocket-session"),
             None,
         ))
     };
@@ -6791,11 +6843,8 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
 
     let conversation =
         selected_account_log_fields(&events, "req_affinity_observation_conversation");
-    assert_eq!(conversation["affinity_anchor_source"], "root-conversation");
-    assert_eq!(
-        conversation["affinity_anchor"],
-        "root-observation-conversation"
-    );
+    assert_eq!(conversation["affinity_anchor_source"], "");
+    assert_eq!(conversation["affinity_anchor"], "");
     assert_eq!(conversation["session_id"], "");
     assert_eq!(conversation["session_id_present"], false);
     assert_ne!(
@@ -6805,7 +6854,7 @@ async fn account_selection_log_should_include_affinity_observation_fields() {
 }
 
 #[tokio::test]
-async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() {
+async fn prompt_cache_key_alone_does_not_create_an_account_binding() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -6830,11 +6879,8 @@ async fn prompt_cache_key_should_become_an_opaque_session_affinity_lookup_key() 
         .expect("prepare provider stream");
     drop(stream);
 
-    let keys = affinity.lookup_keys();
-    assert_eq!(keys.len(), 1);
-    assert_ne!(keys[0], "raw-prompt-cache-key");
-    assert_eq!(keys[0].len(), 64);
-    assert!(keys[0].bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert!(affinity.lookup_keys().is_empty());
+    assert_eq!(affinity.binding_count(), 0);
 }
 
 #[tokio::test]
@@ -6864,6 +6910,7 @@ async fn subagent_requests_should_share_the_root_session_account_affinity_key() 
             ("model".to_owned(), json!("gpt-5.4")),
             ("input".to_owned(), json!("new task")),
             ("prompt_cache_key".to_owned(), json!("root-session-key")),
+            ("session_id".to_owned(), json!("root-session")),
         ]);
         if let Some(subagent_kind) = subagent_kind {
             body.insert(
@@ -6890,7 +6937,8 @@ async fn subagent_requests_should_share_the_root_session_account_affinity_key() 
     }
 
     let keys = affinity.lookup_keys();
-    assert_eq!(keys.len(), 3);
+    assert!(!keys.is_empty());
+    assert_eq!(affinity.binding_count(), 1);
     assert!(
         keys.iter().all(|key| key == &keys[0]),
         "root and derived subagent requests must prefer the same account"
@@ -6951,8 +6999,8 @@ async fn explicit_session_id_should_override_turn_specific_prompt_cache_keys_for
     }
 
     let keys = affinity.lookup_keys();
-    assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0], keys[1]);
+    assert!(!keys.is_empty());
+    assert!(keys.iter().all(|key| key == &keys[0]));
 }
 
 #[tokio::test]
@@ -7003,7 +7051,8 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
         .expect("prepare first affinity request");
     drop(first);
     let affinity_keys = affinity.lookup_keys();
-    assert_eq!(affinity_keys.len(), 1);
+    assert!(!affinity_keys.is_empty());
+    assert!(affinity_keys.iter().all(|key| key == &affinity_keys[0]));
     affinity.seed_binding(
         &ProviderKind::new("openai").expect("provider"),
         &affinity_keys[0],
@@ -7089,7 +7138,7 @@ async fn affinity_quota_switch_should_clear_old_turn_state_without_a_provider_st
 }
 
 #[tokio::test]
-async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_bindings() {
+async fn thread_spawn_children_share_one_binding_scoped_by_client_and_root() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_thread_spawn_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -7149,10 +7198,10 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
         keys[0], keys[5],
         "unidentified thread retains root fallback"
     );
-    assert_ne!(keys[0], keys[2]);
-    assert_ne!(keys[2], keys[3]);
+    assert_eq!(keys[0], keys[2]);
+    assert_eq!(keys[2], keys[3]);
     assert_eq!(keys[2], keys[4], "same child reuses its own key");
-    assert_eq!(affinity.binding_count(), 3);
+    assert_eq!(affinity.binding_count(), 1);
     for (root, client_key) in [
         ("other-root", client_key),
         (
@@ -7178,7 +7227,7 @@ async fn thread_spawn_children_should_inherit_the_root_with_independent_scoped_b
 }
 
 #[tokio::test]
-async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the_root_account() {
+async fn queued_children_follow_root_migration_without_interrupting_the_running_parent() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -7271,12 +7320,33 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     );
     drop(child);
 
-    // 租约层报告 A 已满；既有子线程和首次出现的子线程都能独立选择 B
+    // 子线程只能排队；根请求换号后队列跟随新绑定，迟到的父响应不能改回 A
     leases
         .busy_accounts
         .lock()
         .expect("busy accounts")
         .insert(root_account.clone());
+    let mut queued_child = Box::pin(provider.clone().execute(
+        planned_request("openai", operation("child-one")),
+        context("req_child_waiting_for_root", CancellationToken::new()),
+    ));
+    assert!(futures::FutureExt::now_or_never(queued_child.as_mut()).is_none());
+    drop(
+        provider
+            .clone()
+            .execute(
+                planned_request("openai", operation("parent-session")),
+                context("req_root_migration", CancellationToken::new()),
+            )
+            .await
+            .unwrap(),
+    );
+    let resumed_child = queued_child.await.unwrap();
+    assert_eq!(
+        resumed_child.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    drop(resumed_child);
     for thread in ["child-one", "cold-child"] {
         let mut child = Arc::clone(&provider)
             .execute(
@@ -7314,10 +7384,10 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
     leases.busy_accounts.lock().expect("busy accounts").clear();
 
     for (thread, expected) in [
-        ("parent-session", "acct_subagent_a"),
+        ("parent-session", "acct_subagent_b"),
         ("child-one", "acct_subagent_b"),
         ("cold-child", "acct_subagent_b"),
-        ("new-sibling", "acct_subagent_a"),
+        ("new-sibling", "acct_subagent_b"),
     ] {
         let stream = Arc::clone(&provider)
             .execute(
@@ -7333,7 +7403,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
         );
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 4);
+    assert_eq!(affinity.binding_count(), 1);
     let requests = server.received_requests().await.expect("child requests");
     assert_eq!(requests.len(), 2);
     for request in requests {
@@ -7354,7 +7424,7 @@ async fn child_busy_failover_should_leave_the_running_parent_and_siblings_on_the
 }
 
 #[tokio::test]
-async fn failed_child_failover_should_preserve_both_existing_bindings() {
+async fn failed_child_after_migration_does_not_restore_the_old_session_account() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -7397,6 +7467,19 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
         .lock()
         .expect("busy accounts")
         .insert(ProviderAccountId::new("acct_subagent_a").expect("account ID"));
+    drop(
+        provider
+            .clone()
+            .execute(
+                planned_request(
+                    "openai",
+                    Operation::Generate(generate_with_session_context("root", None, None)),
+                ),
+                context("req_root_before_child_failure", CancellationToken::new()),
+            )
+            .await
+            .unwrap(),
+    );
     let search = Operation::Search(StandaloneSearchRequest::from_raw_json(
         RawJsonPayload::new(
             "openai",
@@ -7438,17 +7521,17 @@ async fn failed_child_failover_should_preserve_both_existing_bindings() {
             .expect("binding after failure");
         assert_eq!(
             stream.metadata().provider_account_id().as_str(),
-            "acct_subagent_a",
-            "failure must not migrate either binding"
+            "acct_subagent_b",
+            "new requests follow the admitted session account"
         );
         drop(stream);
     }
-    assert_eq!(affinity.binding_count(), 2);
+    assert_eq!(affinity.binding_count(), 1);
     server.verify().await;
 }
 
 #[tokio::test]
-async fn invalid_local_conversation_id_should_fall_back_to_an_opaque_affinity_key() {
+async fn local_conversation_state_without_explicit_session_does_not_create_binding() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_local_affinity").await;
     let affinity = Arc::new(MemorySessionAffinity::default());
@@ -7487,10 +7570,8 @@ async fn invalid_local_conversation_id_should_fall_back_to_an_opaque_affinity_ke
         .expect("prepare provider stream");
     drop(stream);
 
-    let keys = affinity.lookup_keys();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0].len(), 64);
-    assert!(keys[0].bytes().all(|byte| byte.is_ascii_hexdigit()));
+    assert!(affinity.lookup_keys().is_empty());
+    assert_eq!(affinity.binding_count(), 0);
 }
 
 #[tokio::test]
@@ -7519,7 +7600,7 @@ async fn completed_response_persists_session_affinity_before_stream_consumer_sto
             Map::from_iter([
                 ("model".to_owned(), json!("gpt-5.4")),
                 ("input".to_owned(), json!("hello")),
-                ("prompt_cache_key".to_owned(), json!("affinity-key")),
+                ("session_id".to_owned(), json!("affinity-key")),
                 ("service_tier".to_owned(), json!("priority")),
             ]),
         )
@@ -11118,7 +11199,7 @@ fn quota_continuation_operation(use_websocket: bool) -> Operation {
                 json!({
                     "model": "gpt-5.4", "input": [{"role":"user","content":"continue"}],
                     "previous_response_id": "resp_previous",
-                    "session_id": "quota-replay", "thread_id": "turn",
+                    "session_id": "quota-replay", "thread_id": "quota-replay",
                 })
                 .as_object()
                 .unwrap()
@@ -11524,7 +11605,7 @@ async fn quota_continuation_full_client_replay_selects_another_account() {
     create_account(&store, "acct_affinity_switch_b").await;
     // 客户端重建完整历史，保留同一会话标识；选号必须跳过刚刚耗尽的原账号
     let replay = Operation::Generate(GenerateRequest::from_protocol_payload(
-        ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"turn","input":full_input}).as_object().unwrap().clone()).unwrap(),
+        ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","session_id":"quota-replay","thread_id":"quota-replay","input":full_input}).as_object().unwrap().clone()).unwrap(),
     ));
     let mut stream = provider
         .execute(

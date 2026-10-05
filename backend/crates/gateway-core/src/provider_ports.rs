@@ -239,53 +239,81 @@ impl fmt::Debug for ProviderSessionAffinityKey {
     }
 }
 
-/// 可丢失的会话到账号偏好；Provider 负责先把原始会话标识哈希为不透明键
+/// 会话绑定快照；版本区分同一账号的不同认领，防止过期和 A → B → A 后的旧写入
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSessionBinding {
+    account_id: ProviderAccountId,
+    revision: String,
+}
+
+impl ProviderSessionBinding {
+    pub fn new(
+        account_id: ProviderAccountId,
+        revision: String,
+    ) -> Result<Self, ProviderStoreError> {
+        if revision.len() != 32 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(ProviderStoreError::new(
+                ProviderStoreErrorKind::InvalidData,
+                "decode provider session binding revision",
+            ));
+        }
+        Ok(Self {
+            account_id,
+            revision,
+        })
+    }
+
+    #[must_use]
+    pub const fn account_id(&self) -> &ProviderAccountId {
+        &self.account_id
+    }
+
+    #[must_use]
+    pub fn revision(&self) -> &str {
+        &self.revision
+    }
+}
+
+/// 已观测请求关联及其账号迁移权限，由 Provider 解释协议后写入
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderSessionAlias {
+    pub session_key: ProviderSessionAffinityKey,
+    pub follow_only: bool,
+}
+
+/// 客户端作用域内的会话账号绑定，原始会话身份由 Provider 哈希后传入
 pub trait ProviderSessionAffinityPort: Send + Sync {
     fn load<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
         key: &'a ProviderSessionAffinityKey,
-    ) -> BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>>;
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionBinding>, ProviderStoreError>>;
 
-    fn bind<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
-        account_id: &'a ProviderAccountId,
-        ttl: Duration,
-    ) -> BoxFuture<'a, Result<(), ProviderStoreError>>;
-
-    /// 仅在亲和键尚未绑定时写入候选账号，并返回原子操作后的实际绑定
-    ///
-    /// 已存在的绑定绝不会被候选账号覆盖；同一根会话的并发首次请求据此收敛到
-    /// 单一账号
-    /// TTL 只在首次写入时设置，已有绑定由成功反馈负责刷新
-    fn claim_or_load<'a>(
-        &'a self,
-        provider_kind: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
-        candidate_account_id: &'a ProviderAccountId,
-        ttl: Duration,
-    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>>;
-
-    /// 仅当当前绑定等于 `expected_account_id`（或键已过期）时写入新账号，
-    /// 并返回原子操作后的实际绑定
-    ///
-    /// Provider 用它迁移不可用账号，以及在成功后以 `expected == replacement`
-    /// 刷新 TTL；迟到的旧账号成功不能覆盖较新的会话 winner
+    /// 在发送前原子认领、续期或迁移；None 表示快照已变化，调用方必须释放租约重新选择
+    /// expected 为 None 只允许首次认领，已有快照必须连同版本匹配
     fn compare_and_bind<'a>(
         &'a self,
         provider_kind: &'a ProviderKind,
         key: &'a ProviderSessionAffinityKey,
-        expected_account_id: &'a ProviderAccountId,
-        replacement_account_id: &'a ProviderAccountId,
+        expected: Option<&'a ProviderSessionBinding>,
+        account_id: &'a ProviderAccountId,
         ttl: Duration,
-    ) -> BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>>;
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionBinding>, ProviderStoreError>>;
 
-    fn clear<'a>(
+    /// 显式观测到的请求关联只指向会话键，不缓存账号，迁移后仍读取当前绑定
+    fn load_alias<'a>(
         &'a self,
-        provider_kind: &'a ProviderKind,
-        key: &'a ProviderSessionAffinityKey,
+        provider: &'a ProviderKind,
+        alias: &'a ProviderSessionAffinityKey,
+    ) -> BoxFuture<'a, Result<Option<ProviderSessionAlias>, ProviderStoreError>>;
+
+    /// 只允许首次关联或同目标续期，冲突时禁止把同一轮次改指其他会话
+    fn bind_alias<'a>(
+        &'a self,
+        provider: &'a ProviderKind,
+        alias: &'a ProviderSessionAffinityKey,
+        session: &'a ProviderSessionAlias,
+        ttl: Duration,
     ) -> BoxFuture<'a, Result<bool, ProviderStoreError>>;
 }
 

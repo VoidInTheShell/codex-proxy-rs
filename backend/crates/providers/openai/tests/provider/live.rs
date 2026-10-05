@@ -672,3 +672,105 @@ async fn read_live_head(stream: &mut (impl tokio::io::AsyncRead + Unpin)) -> Str
     }
     String::from_utf8(head).unwrap()
 }
+
+#[tokio::test]
+async fn descendant_live_creation_waits_and_follows_root_account_migration() {
+    use super::contract::{
+        generate_with_session_context, planned_request,
+        provider_with_affinity_and_base_url_and_leases,
+    };
+    use crate::support::{MemorySessionAffinity, TestLeaseCoordinator};
+    use gateway_core::operation::ProviderHttpHeader;
+    use std::time::Duration;
+
+    let store = Arc::new(MemoryAccountStore::default());
+    create_account(&store, ACCOUNT).await;
+    let affinity = Arc::new(MemorySessionAffinity::default());
+    let leases = Arc::new(TestLeaseCoordinator::default());
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/codex/realtime/calls"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .insert_header("location", format!("/v1/live/{CALL}"))
+                .insert_header("content-type", "application/sdp")
+                .set_body_string("v=0\r\n"),
+        )
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let provider = provider_with_affinity_and_base_url_and_leases(
+        &store,
+        affinity.clone(),
+        upstream.uri(),
+        leases.clone(),
+    );
+    let root = || {
+        planned_request(
+            "openai",
+            Operation::Generate(generate_with_session_context(
+                "live-root",
+                Some("live-root"),
+                None,
+            )),
+        )
+    };
+    drop(
+        provider
+            .clone()
+            .execute(root(), context("req_live_root", CancellationToken::new()))
+            .await
+            .unwrap(),
+    );
+    create_account(&store, "acct_subagent_b").await;
+    leases
+        .busy_accounts
+        .lock()
+        .unwrap()
+        .insert(ProviderAccountId::new(ACCOUNT).unwrap());
+    let live = live_request_with_headers(vec![
+        ProviderHttpHeader::new("session-id", Bytes::from_static(b"live-root")),
+        ProviderHttpHeader::new("thread-id", Bytes::from_static(b"live-child")),
+        ProviderHttpHeader::new("x-session-id", Bytes::from_static(b"unrelated-live-call")),
+    ]);
+    let mut pending = Box::pin(
+        provider
+            .clone()
+            .execute(live, context("req_live_child", CancellationToken::new())),
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(150), pending.as_mut())
+            .await
+            .is_err()
+    );
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+    drop(
+        provider
+            .clone()
+            .execute(
+                root(),
+                context("req_live_root_migrate", CancellationToken::new()),
+            )
+            .await
+            .unwrap(),
+    );
+    let mut stream = tokio::time::timeout(Duration::from_secs(2), pending)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stream.metadata().provider_account_id().as_str(),
+        "acct_subagent_b"
+    );
+    while let Some(event) = stream.next().await {
+        event.unwrap();
+    }
+    assert_eq!(affinity.binding_count(), 1);
+    assert_eq!(
+        upstream.received_requests().await.unwrap()[0].headers["chatgpt-account-id"]
+            .to_str()
+            .unwrap(),
+        "chatgpt-acct_subagent_b"
+    );
+    upstream.verify().await;
+}

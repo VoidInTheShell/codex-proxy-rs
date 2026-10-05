@@ -5464,3 +5464,44 @@ fn provider_candidate_advance_stops_at_the_account_rotation_budget() {
     assert_eq!(state.finalizations.len(), 1);
     assert_eq!(state.finalizations[0].attempt_count, 4);
 }
+
+#[test]
+fn prepare_failure_can_forbid_provider_fallback_without_affecting_ordinary_empty_selection() {
+    for prohibited in [false, true] {
+        let operation = generate_operation();
+        let route_plan = dual_provider_plan(&operation);
+        let mut error = ProviderError::new(
+            ProviderErrorKind::NoEligibleAccount,
+            UpstreamSendState::NotSent,
+        );
+        if prohibited {
+            error = error.with_retry_prohibited();
+        }
+        let openai = Arc::new(ScriptedProvider::new(vec![Script::Error(error)]));
+        let xai = Arc::new(ScriptedProvider::named(
+            "xai",
+            vec![Script::Stream {
+                account_id: "acct_xai_first",
+                items: complete_stream(None),
+            }],
+        ));
+        let mut registry = ProviderRegistry::builder();
+        registry.register(openai.clone()).unwrap();
+        registry.register(xai.clone()).unwrap();
+        let coordinator = AttemptCoordinator::new(GatewayEngine::new(
+            Arc::new(FakeStore::default()),
+            registry.build(),
+        ));
+        let mut session = block_on(coordinator.start(
+            model_request(&operation, SystemTime::now() + Duration::from_secs(30)),
+            operation,
+            route_plan,
+            None,
+            None,
+            CancellationToken::new(),
+        ))
+        .unwrap();
+        assert_eq!(block_on(session.collect_uncommitted()).is_err(), prohibited);
+        assert_eq!(xai.contexts.lock().unwrap().len(), usize::from(!prohibited));
+    }
+}

@@ -336,6 +336,20 @@ async fn initialized_provider_keeps_thread_spawn_transport_conversations_distinc
     .await
     .expect("initialized OpenAI provider");
     let provider = bundle.core_provider();
+    let root = Operation::Generate(GenerateRequest::from_protocol_payload(
+        ProtocolPayload::json_object("openai", json!({"model":"gpt-5.4","input":"root","session_id":"parent-session","thread_id":"parent-session"}).as_object().unwrap().clone()).unwrap()
+            .with_context(Map::from_iter([("use_websocket".to_owned(), json!(false))])),
+    ));
+    drop(
+        provider
+            .clone()
+            .execute(
+                initialized_provider_request(root, account_id),
+                initialized_attempt_context("req_initialized_root", account_id),
+            )
+            .await
+            .unwrap(),
+    );
     let thread_spawn = r#"{"subagent_kind":"thread_spawn"}"#;
     let mut conversation_ids = Vec::new();
 

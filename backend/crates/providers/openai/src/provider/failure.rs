@@ -499,8 +499,8 @@ pub(super) struct WebSocketRecoveryContext<'a> {
     pub(super) request_id: &'a str,
     pub(super) attempt_index: u32,
     pub(super) account_id: &'a str,
-    pub(super) session_affinity_key: Option<&'a ProviderSessionAffinityKey>,
-    pub(super) session_affinity_key_hash: Option<&'a str>,
+    pub(super) session_transport_key: Option<&'a ProviderSessionAffinityKey>,
+    pub(super) session_transport_key_hash: Option<&'a str>,
     pub(super) session_transport_recovery: &'a CodexSessionTransportRecovery,
 }
 
@@ -579,7 +579,7 @@ pub(super) fn apply_websocket_recovery_policy(
     }
     // close 1009 只拒绝当前请求，不代表会话的 WS 传输不可用
     let session_budget_exhausted = failure.error.kind() != ProviderErrorKind::MessageTooBig
-        && context.session_affinity_key.is_some_and(|key| {
+        && context.session_transport_key.is_some_and(|key| {
             context
                 .session_transport_recovery
                 .record_websocket_failure(key, context.max_retries)
@@ -604,8 +604,8 @@ pub(super) fn apply_websocket_recovery_policy(
             transport_requirement = context.requirement.as_str(),
             continuation_recovery_action = "client_replay_required",
             session_http_fallback = session_budget_exhausted,
-            session_affinity_present = context.session_affinity_key.is_some(),
-            session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
+            session_affinity_present = context.session_transport_key.is_some(),
+            session_transport_key_hash = context.session_transport_key_hash.unwrap_or(""),
             "OpenAI upstream WebSocket failed after payload send; proxy replay was suppressed"
         );
         return;
@@ -659,7 +659,7 @@ pub(super) fn apply_websocket_recovery_policy(
         return;
     }
     failure.error.set_pre_delivery_transport_fallback();
-    if let Some(key) = context.session_affinity_key {
+    if let Some(key) = context.session_transport_key {
         context.session_transport_recovery.disable_websocket(key);
     }
     tracing::warn!(
@@ -679,8 +679,8 @@ pub(super) fn apply_websocket_recovery_policy(
             WebSocketFailurePolicy::Budgeted => "retry_budget_exhausted",
             WebSocketFailurePolicy::ImmediateFallback => "upgrade_required",
         },
-        session_affinity_present = context.session_affinity_key.is_some(),
-        session_affinity_key_hash = context.session_affinity_key_hash.unwrap_or(""),
+        session_affinity_present = context.session_transport_key.is_some(),
+        session_transport_key_hash = context.session_transport_key_hash.unwrap_or(""),
         "OpenAI upstream WebSocket disabled for this session"
     );
 }

@@ -1841,9 +1841,10 @@ impl DefaultExecutionService {
                 )),
             }
         };
-        let Some(account) = account else {
+        let Some(binding) = account else {
             return Ok(None);
         };
+        let account = binding.account_id().clone();
         if !parent.account_scope.allows(&account)
             || parent.account_scope.account_provider(&account) != Some(&provider)
         {

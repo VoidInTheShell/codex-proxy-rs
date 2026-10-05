@@ -1229,12 +1229,16 @@ HTTP 请求头及新建 WS 的握手提示按当时的最终出站档位构造�
 `response.create`；空闲连接不占名额，内部重试不重复占用。
 修改 Key 策略对既有 WebSocket 连接的下一次请求同样生效，已开始的请求保持原有快照
 
-运行设置可以分别启用 Key 与账号的有界排队。Key 并发满时按 Key 等待；OpenAI 已绑定的会话账号仅因
-本地并发、请求间隔或已有等待者暂忙时，开启账号排队后优先等待原账号，队列满或超时不因此迁移绑定。
-原账号失效、额度耗尽或进入上游冷却时重新选择；显式调度策略选号与智能调度高权重回切仍按各自规则执行。
-没有适用亲和时先使用其它可调度候选，适用账号均暂时满载后按账号等待。
-关闭账号排队时，OpenAI 本地容量不足返回 `503` / `account_capacity_unavailable`，
-与无候选账号的 `no_available_provider` 区分。RPM、金额限额、失效账号和上游冷却不通过排队绕过。
+运行设置可以分别启用 Key 与账号的有界排队。Key 并发满时按 Key 等待；OpenAI 根线程按配置等待当前账号，
+或沿既有调度策略重选账号并迁移会话绑定。内置调度中的后代线程只等待当前会话账号，不自行换号；
+根线程迁移后，后代线程跟随新账号。没有绑定的后代线程等待根线程首次认领
+
+后代线程始终排队，沿用 `concurrencyWaitTimeoutSeconds` 和请求截止时间；
+`maxWaitingPerAccount` 为 0 时使用每队列 1,000 人上限，否则沿用配置的上限。
+可识别来源的 Search、Images、Live 创建请求采用同样规则，身份与轮次关联见[会话绑定](architecture.md#6-路由账号范围与-continuation)。
+插件显式选号保留原有行为。普通请求关闭账号排队且没有可用容量时返回 `503` / `account_capacity_unavailable`，
+与无候选账号的 `no_available_provider` 区分；排队不绕过账号范围、模型权限、RPM 或金额限额
+
 队列满返回 `429` / `concurrency_queue_full`，排队超时返回 `429` / `concurrency_queue_timeout`；
 WebSocket 使用对应错误事件。等待期间不发送上游请求，取消后释放等待位置，排队重查不重复计入 RPM。
 SSE 在取得有效执行前不发送保活帧，因此此阶段保留 HTTP 错误状态；已开始交付的失败沿用流内错误合同
@@ -1322,9 +1326,10 @@ accountWarmupModel
 账号的 `concurrencyLimit: null` 继承该默认值，单独设置的正数上限仍优先生效。
 无限并发仍统计在途请求，并遵守最小请求间隔、账号可用性与 Client Key 限制
 
-`maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的排队容量，取值 0～1,000，默认 0（关闭）；
+`maxWaitingPerKey` 与 `maxWaitingPerAccount` 是全局统一的普通排队容量，取值 0～1,000，默认 0（关闭）；
 每个 Key、每个账号各自独立计数，没有单对象覆盖字段。执行并发为 5、最大排队数为 5 时，
 该对象最多容纳 5 个执行请求与 5 个等待请求。Key 并发为 0（不限）时跳过 Key 排队。
+OpenAI 后代线程的会话账号等待不随普通账号排队关闭，见 [Client Key 等待规则](#7-client-key)。
 `concurrencyWaitTimeoutSeconds` 取值 1～120，默认 30，从首次入队开始计时，密钥与账号两层共享该等待时限；
 切换账号或内部重试不重新计时；若插件设置了请求总时限，等待也计入该时限。排队超时不用于中断已开始的上游生成。
 设置更新请求须包含这三个字段，新请求使用更新后的快照

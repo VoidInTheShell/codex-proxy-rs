@@ -269,6 +269,7 @@ pub struct CapacityWait<'a, K: Eq + Hash> {
     request_deadline: Option<SystemTime>,
     budget: &'a ConcurrencyWaitBudget,
     priority: WaitPriority,
+    periodic_recheck: bool,
     started_at: Option<Instant>,
     ticket: Option<WaitTicket<K>>,
 }
@@ -287,6 +288,7 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
             request_deadline: request_deadline.into(),
             budget,
             priority: WaitPriority::Normal,
+            periodic_recheck: false,
             started_at: None,
             ticket: None,
         }
@@ -295,6 +297,13 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
     #[must_use]
     pub const fn with_priority(mut self, priority: WaitPriority) -> Self {
         self.priority = priority;
+        self
+    }
+
+    /// 外部绑定可在队列等待期间变化，周期重读仍由 can_try 保持队首资格
+    #[must_use]
+    pub const fn with_periodic_recheck(mut self, enabled: bool) -> Self {
+        self.periodic_recheck = enabled;
         self
     }
 
@@ -346,7 +355,18 @@ impl<'a, K: Clone + Eq + Hash> CapacityWait<'a, K> {
             )?);
         }
         if let Some(ticket) = &self.ticket {
-            ticket.retry().await?;
+            if self.periodic_recheck {
+                Delay::new(
+                    CAPACITY_RECHECK_INTERVAL
+                        .min(ticket.deadline.saturating_duration_since(Instant::now())),
+                )
+                .await;
+                if Instant::now() >= ticket.deadline {
+                    return Err(QueueRejection::Timeout);
+                }
+            } else {
+                ticket.retry().await?;
+            }
         }
         Ok(())
     }

@@ -42,8 +42,7 @@ fn operation(thread_id: &str) -> Operation {
 }
 
 #[tokio::test]
-async fn queued_session_sends_only_after_capacity_recovers_while_a_new_child_can_use_another_account()
- {
+async fn queued_root_and_new_child_both_observe_the_same_account_capacity() {
     let store = Arc::new(MemoryAccountStore::default());
     create_account(&store, "acct_subagent_a").await;
     let leases = Arc::new(TestLeaseCoordinator::default());
@@ -56,7 +55,7 @@ async fn queued_session_sends_only_after_capacity_recovers_while_a_new_child_can
                 .insert_header("content-type", "text/event-stream")
                 .set_body_string(CAPTURE_COMPLETED_SSE),
         )
-        .expect(3)
+        .expect(2)
         .mount(&server)
         .await;
     let provider = provider_with_affinity_and_base_url_and_leases(
@@ -90,23 +89,18 @@ async fn queued_session_sends_only_after_capacity_recovers_while_a_new_child_can
     ));
     assert!(waiting.as_mut().now_or_never().is_none());
 
-    // 子线程还没有自己的绑定，父账号只是默认偏好，不能被强制挤进父账号队列
-    let mut child = provider
+    // 新子线程也服从根账号队列，队列满不能选择另一账号
+    let error = provider
         .execute(
             planned_request("openai", operation("capacity-child")),
             queued_context("req_capacity_child"),
         )
         .await
+        .err()
         .unwrap();
-    assert_eq!(
-        child.metadata().provider_account_id().as_str(),
-        "acct_subagent_b"
-    );
-    while let Some(event) = child.next().await {
-        event.unwrap();
-    }
-    drop(child);
-    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    assert_eq!(error.kind(), ProviderErrorKind::ConcurrencyQueueFull);
+    assert!(error.retry_is_prohibited());
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
 
     leases.busy_accounts.lock().unwrap().clear();
     let mut resumed = waiting.await.unwrap();
@@ -124,11 +118,7 @@ async fn queued_session_sends_only_after_capacity_recovers_while_a_new_child_can
         .collect::<Vec<_>>();
     assert_eq!(
         accounts,
-        [
-            "chatgpt-acct_subagent_a",
-            "chatgpt-acct_subagent_b",
-            "chatgpt-acct_subagent_a"
-        ]
+        ["chatgpt-acct_subagent_a", "chatgpt-acct_subagent_a"]
     );
     server.verify().await;
 }

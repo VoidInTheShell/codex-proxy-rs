@@ -175,3 +175,34 @@ fn object(value: Value) -> Map<String, Value> {
     };
     object
 }
+
+#[test]
+fn account_identity_uses_logical_metadata_instead_of_parent_cache_routing() {
+    use gateway_protocol::openai::codex_account_session_id;
+    let context = object(
+        json!({"session_id":"parent-cache", "turn_metadata": "{\"session_id\":\"handshake-session\"}"}),
+    );
+    let body = object(
+        json!({"client_metadata":{"x-codex-turn-metadata":"{\"session_id\":\"actual-session\",\"thread_id\":\"child\"}"}}),
+    );
+    assert_eq!(
+        codex_account_session_id(&body, &context).as_deref(),
+        Some("actual-session")
+    );
+    assert_eq!(
+        codex_session_id(&body, &context).as_deref(),
+        Some("parent-cache")
+    );
+}
+
+#[test]
+fn account_identity_does_not_infer_a_session_from_turn_or_cache_keys() {
+    use gateway_protocol::openai::codex_account_session_id;
+    for body in [
+        json!({"prompt_cache_key":"shared-prompt"}),
+        json!({"turn_id":"turn", "thread_id":"child"}),
+        json!({"input":"hello"}),
+    ] {
+        assert_eq!(codex_account_session_id(&object(body), &Map::new()), None);
+    }
+}

@@ -771,6 +771,9 @@ pub(super) fn map_request_error(error: CodexRequestEncodeError) -> ProviderError
 
 pub(super) fn map_selection_error(error: CredentialSelectionError) -> ProviderError {
     match error {
+        CredentialSelectionError::Cancelled => provider_error(ProviderErrorKind::Cancelled, UpstreamSendState::NotSent).with_retry_prohibited(),
+        CredentialSelectionError::ContinuationOwnerChanged => continuation_replay_required_error("scope_unavailable"),
+        CredentialSelectionError::SessionBound(error) => map_selection_error(*error).with_retry_prohibited(),
         CredentialSelectionError::QueueRejected(error) => {
             provider_error(error.provider_kind(), UpstreamSendState::NotSent)
         }

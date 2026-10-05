@@ -787,49 +787,51 @@ impl MemoryCooldownPort {
 impl ProviderSessionAffinityPort for TestSessionAffinity {
     fn load<'a>(
         &'a self,
-        _provider_kind: &'a ProviderKind,
-        _key: &'a ProviderSessionAffinityKey,
-    ) -> futures::future::BoxFuture<'a, Result<Option<ProviderAccountId>, ProviderStoreError>> {
+        _: &'a ProviderKind,
+        _: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::ProviderSessionBinding>, ProviderStoreError>,
+    > {
         Box::pin(async { Ok(None) })
     }
-
-    fn bind<'a>(
-        &'a self,
-        _provider_kind: &'a ProviderKind,
-        _key: &'a ProviderSessionAffinityKey,
-        _account_id: &'a ProviderAccountId,
-        _ttl: Duration,
-    ) -> futures::future::BoxFuture<'a, Result<(), ProviderStoreError>> {
-        Box::pin(async { Ok(()) })
-    }
-
-    fn claim_or_load<'a>(
-        &'a self,
-        _provider_kind: &'a ProviderKind,
-        _key: &'a ProviderSessionAffinityKey,
-        candidate_account_id: &'a ProviderAccountId,
-        _ttl: Duration,
-    ) -> futures::future::BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
-        Box::pin(async move { Ok(candidate_account_id.clone()) })
-    }
-
     fn compare_and_bind<'a>(
         &'a self,
-        _provider_kind: &'a ProviderKind,
-        _key: &'a ProviderSessionAffinityKey,
-        _expected_account_id: &'a ProviderAccountId,
-        replacement_account_id: &'a ProviderAccountId,
-        _ttl: Duration,
-    ) -> futures::future::BoxFuture<'a, Result<ProviderAccountId, ProviderStoreError>> {
-        Box::pin(async move { Ok(replacement_account_id.clone()) })
+        _: &'a ProviderKind,
+        _: &'a ProviderSessionAffinityKey,
+        _: Option<&'a gateway_core::provider_ports::ProviderSessionBinding>,
+        account: &'a ProviderAccountId,
+        _: Duration,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::ProviderSessionBinding>, ProviderStoreError>,
+    > {
+        Box::pin(async move {
+            gateway_core::provider_ports::ProviderSessionBinding::new(
+                account.clone(),
+                "00000000000000000000000000000000".to_owned(),
+            )
+            .map(Some)
+        })
     }
-
-    fn clear<'a>(
+    fn load_alias<'a>(
         &'a self,
-        _provider_kind: &'a ProviderKind,
-        _key: &'a ProviderSessionAffinityKey,
+        _: &'a ProviderKind,
+        _: &'a ProviderSessionAffinityKey,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<Option<gateway_core::provider_ports::ProviderSessionAlias>, ProviderStoreError>,
+    > {
+        Box::pin(async { Ok(None) })
+    }
+    fn bind_alias<'a>(
+        &'a self,
+        _: &'a ProviderKind,
+        _: &'a ProviderSessionAffinityKey,
+        _: &'a gateway_core::provider_ports::ProviderSessionAlias,
+        _: Duration,
     ) -> futures::future::BoxFuture<'a, Result<bool, ProviderStoreError>> {
-        Box::pin(async { Ok(false) })
+        Box::pin(async { Ok(true) })
     }
 }
 
