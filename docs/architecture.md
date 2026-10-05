@@ -369,6 +369,9 @@ Client Key 鉴权完成后，API adapter 从有界请求头识别 Codex Desktop/
   重试与提交边界。具体错误合同见 [数据面接口](api.md#3-openai-数据面与模型目录)
 - Provider 可将明确容量拒绝标记为有界同账号退避，Core 在既有安全重放边界内执行，按账号维护请求内
   预算，耗尽后复用普通换号路径。该退避消耗总路由预算，与 WS 传输恢复、OAuth 刷新及账号额度冷却分开
+- 换号有独立的请求内预算：选中账号与上一 attempt 不同的路由 attempt 至多 3 次，跨 Provider 候选
+  推进与 continuation 排除重放同样受限；预算耗尽后不再换号，以最后一个原始上游错误终态。同账号重试
+  与总路由预算不受影响
 - Provider 显式标记的终止拒绝禁止自动重试与传输回退，优先于未发送状态和安全重放证明
 - 跨 Provider 只在账号范围和能力都允许，且请求尚未到达上游或已被证明可安全重放时发生
 - 可恢复观测写入失败不能替换已经确定的客户端协议结果
@@ -717,6 +720,9 @@ credential 与 quota 是两组独立事实：credential refresh 不等于 quota 
 - OpenAI 支持 OAuth、AT/RT、PAT 和上游 API Key。OAuth 身份来自官方 JWT claims，PAT 经官方身份接口验证，
   不信任导入文档顶层身份字段。RT-only 导入先换取 AT；AT-only、PAT 与 API Key 不参加 OAuth 自动续期。
   输入形态和适用操作见 [账号能力与导入](api.md#账号能力导入与-oauth)
+- OAuth 自动续期按运行时设置的提前量触发，默认 300 秒对齐官方客户端 exp 前 5 分钟的刷新窗口。
+  每个账号的有效提前量在 [margin, 2×margin] 内由账号 ID 派生稳定错峰偏移，减少同一时刻
+  到期账号的集中刷新；恢复窗口内的强制刷新不受偏移影响
 - xAI 使用 OAuth session；API Key 不是受支持的账号 credential。刷新额度时同步查询官方实时订阅，
   只把套餐事实写入现有 quota JSON。明确无付费订阅的个人账号显示 Free；查询失败、缺失字段或
   团队身份不推断为 Free，订阅查询失败不影响额度观测
