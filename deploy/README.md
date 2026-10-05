@@ -253,7 +253,9 @@ HTTP 传输不加密，公网部署仍建议使用 HTTPS。
 并设置 `X-Accel-Buffering: no` 和 `Cache-Control: no-cache, no-transform`。
 反向代理仍需允许这些响应头生效；首个事件到达前的等待也需要足够的读取超时
 
-网关默认不限制模型请求的总执行时长。OpenAI 上游流默认有 300 秒空闲超时，持续收到数据不会因总时长超过 600 秒而中断
+网关默认不限制模型请求的总执行时长。OpenAI 上游流默认有 300 秒空闲超时，持续收到数据不会因总时长超过 600 秒而中断。
+`api.request_timeout_seconds` 默认 `null`，只控制 HTTP 路由返回响应前的等待，不是流式正文或 WebSocket 每轮执行的总时限。
+排队、插件显式执行期限与客户端断开的边界见 [请求期限](../docs/api.md#请求期限)
 
 OpenAI 上游池化 WebSocket 默认每 25 秒发送一次 Ping，发出后允许等待 30 秒；
 收到 Pong 或其他入站帧即解除本次心跳截止，持续无响应则以 `pong_timeout` 关闭连接。
@@ -515,6 +517,7 @@ OAuth 恢复开关为 `host.logging.oauth_recovery`，默认关闭，与普通�
 | --- | --- |
 | `config.yaml` 含 `openai.wire_profile.location` | 该字段会被忽略，可删除；如需继续覆盖请求位置，将值填入管理端全局请求位置并开启开关，数据库初始化不会自动导入 |
 | `config.yaml` 含 `host.logging.file.max_files` | 该字段会被忽略，可删除；日志按 `retention_days` 保留，`max_file_size_mb` 只控制分片大小 |
+| 使用带 `app-runtime` 继承的 Compose，现有 `config.yaml` 缺少对应段 | 合并模板中的 `services.app-runtime`，保留原凭据桥接；不开启内存优化时将 `GLIBC_TUNABLES` 设为 `''`，见 [小内存优化](#小内存优化) |
 | 使用旧管理员认证接口或 Cookie | 改用 `/api/auth/*` 并重新登录；会话合同见 [认证 API](../docs/api.md#4-浏览器认证) |
 
 更新部署文件后，从安装目录拉取目标版本镜像并重建应用容器：
