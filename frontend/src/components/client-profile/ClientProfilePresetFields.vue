@@ -11,7 +11,7 @@ const props = withDefaults(defineProps<{
   disabled: boolean
   maxVersionLag?: number
 }>(), {
-  maxVersionLag: 8,
+  maxVersionLag: 10,
 })
 const model = defineModel<ClientProfileSelection | null>({ required: true })
 const presetDraft = shallowRef<PresetClientProfileSelection>()
@@ -75,13 +75,12 @@ const versionLag = computed({
       model.value = { ...preset.value, versionLag: value === '' ? null : Number(value) }
   },
 })
-const lagOptions = computed(() => [
-  { label: '不滞后', value: '' },
-  ...Array.from({ length: props.maxVersionLag }, (_, index) => ({
-    label: `滞后 ${index + 1} 版`,
-    value: String(index + 1),
-  })),
-])
+const versionLagError = computed(() => {
+  const value = preset.value?.versionLag
+  return value != null && (!Number.isInteger(value) || value < 1 || value > props.maxVersionLag)
+    ? `请输入 1～${props.maxVersionLag} 的正整数`
+    : ''
+})
 const terminal = computed({
   get: () => preset.value?.terminal ?? '',
   set: (value: string) => {
@@ -140,20 +139,25 @@ const userAgent = computed({
       {{ currentPreset.reason }}
     </p>
     <div v-if="!custom" class="grid gap-4 sm:grid-cols-2">
-      <BaseFormItem label="版本滞后" description="跟随官方发布但滞后 N 个版本采用">
-        <BaseSelect
+      <BaseFormItem label="版本滞后" :error="versionLagError">
+        <BaseInput
           v-model="versionLag"
-          class="w-full"
-          :options="lagOptions"
+          aria-label="版本滞后"
+          type="number"
+          inputmode="numeric"
+          min="1"
+          :max="maxVersionLag"
+          step="1"
+          :placeholder="`滞后 1～${maxVersionLag} 个版本，留空不滞后`"
           :disabled="disabled"
         />
       </BaseFormItem>
-      <BaseFormItem label="终端标识" description="官方真实值如 iTerm.app/3.5.0、vscode/1.99.0、tmux-256color；留空使用 unknown">
+      <BaseFormItem label="终端标识">
         <BaseInput
           v-model="terminal"
           :disabled="disabled"
           aria-label="终端标识"
-          placeholder="unknown"
+          placeholder="留空使用 unknown"
           maxlength="128"
           spellcheck="false"
           autocomplete="off"

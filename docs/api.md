@@ -1387,7 +1387,7 @@ UA 须为 1 至 4096 字节的单行可见 ASCII 文本，首尾不能含空白�
 | `client` | 必填，`desktop` 或 `cli` |
 | `platform` | 必填，`macos`、`linux` 或 `windows` |
 | `versionMode` | 必填，`latest` 或 `fixed` |
-| `versionLag` | 仅 `latest` 可选的滞后档位，1～8 的整数；`fixed` 必须省略或为 `null` |
+| `versionLag` | 仅 `latest` 可选的滞后数量，1～10 的整数；`fixed` 必须省略或为 `null` |
 | `cliEntry` | CLI 可选 `tui` 或 `exec`，省略或 `null` 保留 Core 默认身份；Desktop 不接受此字段 |
 | `originator`、`osType`、`osVersion`、`arch`、`terminal` | 可选自定义参数，非空、最多 128 字节；只接受可见 ASCII，不能包含括号、分号、反斜杠及首尾空白 |
 | `codexVersion` | `fixed` 必填的 Core SemVer；`latest` 必须省略或为 `null` |

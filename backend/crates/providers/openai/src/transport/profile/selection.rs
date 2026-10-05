@@ -71,11 +71,8 @@ pub enum VersionMode {
     Fixed,
 }
 
-/// `latest` 模式允许的最大滞后档位；同样限制发布历史的保留深度。
-///
-/// 官方 CLI 用户手动升级形成长尾（活跃窗口约 40 个版本），档位只需打破
-/// 「全池随最新发布齐步切换」，不需要复刻完整分布，8 档已覆盖数周滞后。
-pub const MAX_VERSION_LAG: u32 = 8;
+/// `latest` 模式允许的最大滞后数量，同时限制发布历史的保留深度
+pub const MAX_VERSION_LAG: u32 = 10;
 
 /// 空的可选字段表示使用对应预设参数；Key 覆盖始终是一份完整选择。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

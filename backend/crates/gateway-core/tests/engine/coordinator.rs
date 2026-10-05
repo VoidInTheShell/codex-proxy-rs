@@ -733,6 +733,7 @@ fn dual_provider_plan(operation: &Operation) -> RoutingPlan {
         (openai.clone(), "acct_openai_first"),
         (openai.clone(), "acct_openai_second"),
         (openai.clone(), "acct_openai_third"),
+        (openai.clone(), "acct_openai_fourth"),
         (xai.clone(), "acct_xai_first"),
     ]
     .into_iter()
@@ -4981,8 +4982,8 @@ fn connection_failure_after_a_replay_safe_rejection_keeps_existing_account_rotat
 
 #[test]
 fn account_rotation_attempts_stop_at_the_independent_rotation_budget() {
-    // 三个账号依次交付前换号重试：第 3 次换号被独立预算拦下，
-    // 不再重放到第 4 个账号，以最后账号上的原始上游错误终态。
+    // 四个账号依次交付前换号重试，第 4 次换号被独立预算拦下
+    // 不再重放到第 5 个账号，以最后账号上的原始上游错误终态
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let (coordinator, store, provider) = coordinator(vec![
@@ -5012,7 +5013,16 @@ fn account_rotation_attempts_stop_at_the_independent_rotation_budget() {
             .with_status(429)
             .with_replay_safe())],
         },
-        // 预算内不应触达第 4 个账号；保留成功脚本以暴露超限重放。
+        Script::Stream {
+            account_id: "acct_tool",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        // 预算内不应触达第 5 个账号，保留成功脚本以暴露超限重放
         Script::Stream {
             account_id: "acct_wrong",
             items: complete_stream(None),
@@ -5028,27 +5038,27 @@ fn account_rotation_attempts_stop_at_the_independent_rotation_budget() {
     ))
     .expect("start execution");
     let error = block_on(session.collect_uncommitted())
-        .expect_err("rotation budget must stop the fourth account");
+        .expect_err("rotation budget must stop the fifth account");
     let gateway_core::engine::EngineError::Provider(error) = error else {
         panic!("expected provider error")
     };
     assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
     assert_eq!(error.upstream_status(), Some(429));
     let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 3, "the fourth account must not be replayed");
+    assert_eq!(contexts.len(), 4, "the fifth account must not be replayed");
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.attempts.len(), 3);
-    assert_eq!(state.intermediate_failures, 2);
+    assert_eq!(state.attempts.len(), 4);
+    assert_eq!(state.intermediate_failures, 3);
     assert_eq!(state.finalizations.len(), 1);
     assert_eq!(state.finalizations[0].outcome, ExecutionOutcome::Failed);
-    assert_eq!(state.finalizations[0].attempt_count, 3);
+    assert_eq!(state.finalizations[0].attempt_count, 4);
     assert_eq!(state.finalizations[0].upstream_status_code, Some(429));
 }
 
 #[test]
 fn same_account_retries_do_not_consume_the_account_rotation_budget() {
-    // 同账号瞬态退避不消耗换号预算：两轮「瞬态预算耗尽后换号」仍被允许，
-    // 第三个账号成功完成请求，验证 2 次换号预算未被同账号重试占用。
+    // 同账号瞬态退避不消耗换号预算，三轮瞬态预算耗尽后仍允许换号
+    // 第四个账号成功完成请求，验证 3 次换号预算未被同账号重试占用
     let operation = generate_operation();
     let route_plan = plan(&operation);
     let mut scripts = (0..4)
@@ -5061,8 +5071,12 @@ fn same_account_retries_do_not_consume_the_account_rotation_budget() {
         account_id: "acct_second",
         items: vec![Err(transient_rejection())],
     }));
-    scripts.push(Script::Stream {
+    scripts.extend((0..4).map(|_| Script::Stream {
         account_id: "acct_other",
+        items: vec![Err(transient_rejection())],
+    }));
+    scripts.push(Script::Stream {
+        account_id: "acct_tool",
         items: complete_stream(None),
     });
     let (coordinator, store, provider) = coordinator(scripts);
@@ -5075,12 +5089,13 @@ fn same_account_retries_do_not_consume_the_account_rotation_budget() {
         CancellationToken::new(),
     ))
     .expect("start execution");
-    block_on(session.collect_uncommitted()).expect("third account succeeds");
+    block_on(session.collect_uncommitted()).expect("fourth account succeeds");
     block_on(session.commit_downstream(Some(200))).expect("commit");
     let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 9);
+    assert_eq!(contexts.len(), 13);
     let first = ProviderAccountId::new("acct_first").expect("account");
     let second = ProviderAccountId::new("acct_second").expect("account");
+    let third = ProviderAccountId::new("acct_other").expect("account");
     // 每个账号的 3 次同账号退避都钉选原账号，只有预算耗尽后的失败换号。
     for context in &contexts[1..4] {
         assert_eq!(context.required_account(), Some(&first));
@@ -5088,21 +5103,28 @@ fn same_account_retries_do_not_consume_the_account_rotation_budget() {
     for context in &contexts[5..8] {
         assert_eq!(context.required_account(), Some(&second));
     }
+    for context in &contexts[9..12] {
+        assert_eq!(context.required_account(), Some(&third));
+    }
     assert_eq!(contexts[4].required_account(), None);
     assert!(contexts[4].excluded_accounts().contains(&first));
     assert_eq!(contexts[8].required_account(), None);
     assert!(contexts[8].excluded_accounts().contains(&first));
     assert!(contexts[8].excluded_accounts().contains(&second));
+    assert_eq!(contexts[12].required_account(), None);
+    assert!(contexts[12].excluded_accounts().contains(&first));
+    assert!(contexts[12].excluded_accounts().contains(&second));
+    assert!(contexts[12].excluded_accounts().contains(&third));
     assert_eq!(
         store.state.lock().expect("store").finalizations[0].attempt_count,
-        9
+        13
     );
 }
 
 #[test]
 fn continuation_replay_rotation_stops_at_the_account_rotation_budget() {
     // native → replay owner → replay any 的排除臂也受换号预算约束：
-    // 第二次换号后不再排除当前账号续写换号，以原始上游错误终态。
+    // 第三次换号后不再排除当前账号续写换号，以原始上游错误终态
     let Operation::Generate(generate) = generate_operation() else {
         panic!("generate operation");
     };
@@ -5148,6 +5170,15 @@ fn continuation_replay_rotation_stops_at_the_account_rotation_budget() {
             .with_replay_safe())],
         },
         Script::Stream {
+            account_id: "acct_other",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::RateLimited,
+                UpstreamSendState::Sent,
+            )
+            .with_status(429)
+            .with_replay_safe())],
+        },
+        Script::Stream {
             account_id: "acct_wrong",
             items: complete_stream(None),
         },
@@ -5175,17 +5206,21 @@ fn continuation_replay_rotation_stops_at_the_account_rotation_budget() {
     };
     assert_eq!(error.kind(), ProviderErrorKind::RateLimited);
     let contexts = provider.contexts.lock().expect("contexts lock");
-    assert_eq!(contexts.len(), 3, "the fourth account must not be replayed");
+    assert_eq!(contexts.len(), 4, "the fifth account must not be replayed");
     assert_eq!(
         contexts[2].continuation_attempt(),
+        ContinuationAttempt::ReplayAny
+    );
+    assert_eq!(
+        contexts[3].continuation_attempt(),
         ContinuationAttempt::ReplayAny
     );
 }
 
 #[test]
 fn provider_candidate_advance_stops_at_the_account_rotation_budget() {
-    // 换号预算耗尽后，跨 Provider 候选推进不再执行：openai 上第三次换号已到预算，
-    // 空选路不再推进到 xai，沿用容量失败的原有终态语义（最后一个可重试上游错误）。
+    // openai 上第三次换号耗尽预算后，空选路不再推进到 xai
+    // 沿用容量失败的原有终态语义，返回最后一个可重试上游错误
     let operation = generate_operation();
     let route_plan = dual_provider_plan(&operation);
     let store = Arc::new(FakeStore::default());
@@ -5208,6 +5243,14 @@ fn provider_candidate_advance_stops_at_the_account_rotation_budget() {
         },
         Script::Stream {
             account_id: "acct_openai_third",
+            items: vec![Err(ProviderError::new(
+                ProviderErrorKind::Transport,
+                UpstreamSendState::NotSent,
+            )
+            .with_replay_safe())],
+        },
+        Script::Stream {
+            account_id: "acct_openai_fourth",
             items: vec![Err(ProviderError::new(
                 ProviderErrorKind::UpstreamCapacityUnavailable,
                 UpstreamSendState::NotSent,
@@ -5253,15 +5296,15 @@ fn provider_candidate_advance_stops_at_the_account_rotation_budget() {
     assert_eq!(error.kind(), ProviderErrorKind::UpstreamCapacityUnavailable);
     assert_eq!(
         openai.contexts.lock().expect("contexts lock").len(),
-        4,
-        "the third stream failure and the empty selection still run"
+        5,
+        "the fourth stream failure and the empty selection still run"
     );
     assert!(
         xai.contexts.lock().expect("contexts lock").is_empty(),
         "the rotation budget must block the provider candidate advance"
     );
     let state = store.state.lock().expect("store lock");
-    assert_eq!(state.attempts.len(), 3);
+    assert_eq!(state.attempts.len(), 4);
     assert_eq!(state.finalizations.len(), 1);
-    assert_eq!(state.finalizations[0].attempt_count, 3);
+    assert_eq!(state.finalizations[0].attempt_count, 4);
 }
