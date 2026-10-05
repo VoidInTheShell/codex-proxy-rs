@@ -4,6 +4,7 @@ mod auth;
 mod endpoint;
 mod error;
 mod images;
+mod live;
 mod middleware;
 mod models;
 mod responses;

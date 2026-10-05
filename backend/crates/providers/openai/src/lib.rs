@@ -179,7 +179,8 @@ pub async fn initialize(
         )
         .map_err(OpenAiInitializeError::Provider)?
         .with_session_identity(session_identity)
-        .with_timezone(config.timezone),
+        .with_timezone(config.timezone)
+        .with_live_support(repository.clone()),
     );
     let token_client = Arc::new(
         credential::token_client::openai_token_client(

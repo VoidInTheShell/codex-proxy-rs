@@ -8,6 +8,7 @@ mod error;
 mod event;
 mod health;
 mod lifecycle;
+mod live;
 mod metering;
 mod middleware;
 mod operation;
