@@ -56,7 +56,7 @@ impl PluginResourceAccess for DefaultPluginResourceAccess {
                         name: command.name,
                         description: command.description,
                         color: command.color,
-                        disable_fast: command.disable_fast,
+                        fast_mode: command.fast_mode,
                     },
                     context,
                 )

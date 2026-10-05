@@ -25,7 +25,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Capability::Middleware,
             ContributionDeclaration {
                 id: "test.example.middleware".into(),
-                version: 3,
+                version: 4,
                 stages: vec![
                     Stage::Http,
                     Stage::WebSocket,
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             id: "test.example.middleware".into(),
             version: configuration["middleware_version"]
                 .as_u64()
-                .unwrap_or(3)
+                .unwrap_or(4)
                 .try_into()?,
             stages: vec![if configuration["service"] == true {
                 Stage::Service
@@ -489,6 +489,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     call.request.head.settings,
                     configuration["expected_settings"]
                 );
+                if let Some(expected) = configuration.get("expected_legacy_source") {
+                    let sources = &call.request.head.settings_sources["execution"];
+                    assert!(sources.get("fast_mode").is_none());
+                    assert!(sources["input"].get("fast_mode").is_none());
+                    assert_eq!(sources["input"]["disable_fast"], false);
+                    assert_eq!(&sources["disable_fast"], expected);
+                }
                 if let Some(settings) = configuration.get("settings") {
                     call.request.head.settings = settings.clone();
                 }

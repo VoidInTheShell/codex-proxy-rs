@@ -26,6 +26,7 @@ use gateway_admin::{
     },
 };
 use gateway_core::{
+    account::FastMode,
     account::{AccountStatusFacts, CredentialState, QuotaState},
     routing::AccountGroupId,
 };
@@ -241,7 +242,7 @@ impl AccountRuntimeStore for FakeRuntimeStore {
 fn group_record() -> AccountGroupRecord {
     let now = Utc::now();
     AccountGroupRecord {
-        disable_fast: false,
+        fast_mode: FastMode::Default,
         id: group_id(),
         name: "Primary".to_owned(),
         description: None,

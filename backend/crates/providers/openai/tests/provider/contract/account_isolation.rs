@@ -267,7 +267,7 @@ async fn middleware_can_override_account_headers_on_http_and_websocket() {
                             })
                             .collect(),
                     }),
-                    false,
+                    FastMode::Default,
                 ),
             )
             .await

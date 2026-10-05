@@ -6,7 +6,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::{StreamExt, future::BoxFuture};
 use gateway_core::account::{
-    AccountModelAccess, AccountModelAccessMode, ProviderAccountId, ProviderAccountStore,
+    AccountModelAccess, AccountModelAccessMode, FastMode, ProviderAccountId, ProviderAccountStore,
 };
 use gateway_core::engine::middleware::{
     MiddlewareContext, MiddlewareError, MiddlewareNext, MiddlewarePlan, MiddlewareRequest,
@@ -124,7 +124,11 @@ async fn bootstrap() -> (Arc<dyn Provider>, Arc<MemoryAccountStore>, MockServer)
         .clone()
         .execute(
             request,
-            context_with_middleware("req_live_regression", Arc::new(ModelMiddleware), false),
+            context_with_middleware(
+                "req_live_regression",
+                Arc::new(ModelMiddleware),
+                FastMode::Default,
+            ),
         )
         .await
         .expect("live stream");

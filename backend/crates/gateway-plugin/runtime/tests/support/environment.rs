@@ -32,6 +32,7 @@ use gateway_admin::{
         system::{SystemOperationError, SystemOperations, SystemUpdateEventStream},
     },
 };
+use gateway_core::account::FastMode;
 use gateway_plugin_runtime::{
     PackageInspector, PackageLimits, PluginRuntime, PluginRuntimeConfig, RpcLimits,
 };
@@ -126,7 +127,7 @@ impl Environment {
             .account_groups()
             .create_account_group(
                 NewAccountGroup {
-                    disable_fast: false,
+                    fast_mode: FastMode::Default,
                     id: id.clone(),
                     name: format!("fixture {}", id.as_str()),
                     description: None,
