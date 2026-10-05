@@ -59,6 +59,7 @@ impl VisitMut for WireTypes {
                 "DateTime" | "Tz" | "TokenPrice" | "AdminApiKey" => parse_quote!(String),
                 "OpaqueProviderData" => parse_quote!(serde_json::Map<String, serde_json::Value>),
                 _ => Type::Path(syn::TypePath {
+                    attrs: std::mem::take(&mut path.attrs),
                     qself: None,
                     path: last.into(),
                 }),
