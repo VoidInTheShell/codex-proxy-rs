@@ -1670,6 +1670,21 @@ fn initialized_account_scope(account_id: &str) -> Arc<FrozenAccountScope> {
     ))
 }
 
+pub(crate) async fn initialized_test_provider(
+    accounts: Arc<MemoryAccountStore>,
+    base_url: String,
+) -> Arc<dyn gateway_core::engine::provider::Provider> {
+    let mut config = valid_config();
+    config.config.api.base_url = base_url;
+    provider_openai::initialize(
+        config.config.clone(),
+        provider_ports_with(accounts, Arc::new(TestOAuthPending::default())),
+    )
+    .await
+    .expect("initialized provider")
+    .core_provider()
+}
+
 fn provider_ports() -> ProviderStorePorts {
     provider_ports_with(
         Arc::new(MemoryAccountStore::default()),
