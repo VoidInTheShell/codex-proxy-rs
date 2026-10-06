@@ -589,14 +589,14 @@ config 返回 `{ name, plaintextKey }`，仅读取服务端会话绑定的当前
 | `GET` | `/api/admin/accounts` | `page`、`pageSize`、`provider`、`groupId`、`search`、`status`、排序字段 | 分页查询账号与汇总 |
 | `GET` | `/api/admin/accounts/detail` | `accountId` | 查询账号详情、额度和本地用量 |
 | `GET` | `/api/admin/accounts/export` | `accountIds`、`confirm=export_sensitive_accounts` | 显式导出最多 200 个账号的敏感 Provider 文档 |
-| `POST` | `/api/admin/accounts/import` | `{ provider, data, settings?, outboundProxyId? }` | 导入或按上游身份更新账号，可同时应用调度、分组设置与默认代理 |
+| `POST` | `/api/admin/accounts/import` | `{ provider, data, settings?, outboundProxyId? }` | 导入或按上游身份更新账号，可同时应用调度、分组设置、请求画像与默认代理 |
 | `POST` | `/api/admin/accounts/import-tasks` | `{ submissionId, items: [{ provider, data, settings?, outboundProxyId? }] }` | 接受后台导入，返回 HTTP 202 和任务摘要 |
 | `GET` | `/api/admin/accounts/import-tasks` | 无 | 当前管理员仍保留的任务，按创建时间倒序 |
 | `GET` | `/api/admin/accounts/import-tasks/detail` | `taskId` | 任务摘要和逐条结果，不含原始凭据 |
 | `POST` | `/api/admin/accounts/import-tasks/stop` | `{ taskId }` | 跳过未开始的条目，已开始的条目继续完成 |
 | `POST` | `/api/admin/accounts/refresh` | `{ accountId }` | 手工刷新 OAuth credential（`idToken` / `accessToken` / `refreshToken`），不刷新额度 |
 | `POST` | `/api/admin/accounts/recover` | `{ accountId }` | 停用账号只启用调度；已启用账号强制清除本地错误/额度/cooldown 事实，不访问上游 |
-| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, connection? }` | 一次更新账号设置；`connection` 支持 OpenAI OAuth 传输方式及 API Key 连接配置，见下文 |
+| `POST` | `/api/admin/accounts/update` | `{ accountId, enabled, concurrencyLimit, weight, groupIds, notes?, modelAccess?, outboundProxyId?, outboundProxyUrl?, requestProfile?, connection? }` | 一次更新账号设置；`connection` 支持 OpenAI OAuth 传输方式及 API Key 连接配置，见下文 |
 | `POST` | `/api/admin/accounts/batch-update` | `{ accountIds, enabled?, concurrencyLimit?, weight?, groupIds?, modelAccess?, outboundProxyId?, outboundProxyUrl? }` | 一次事务更新所选账号；仅修改提供的字段，至少提供一项修改 |
 | `POST` | `/api/admin/accounts/delete` | `{ provider, accountIds }` | 批量删除 1–200 个账号 |
 | `GET` | `/api/admin/accounts/quota` | `accountId` | 读取当前额度，不强制访问上游；Provider 未提供额度能力时返回空额度投影 |
@@ -686,6 +686,29 @@ Pro 使用 `all` 时也能参与 luna 调度。套餐名称不自动生成或修
 Images、独立 Search 及管理员连接测试不受该文本模型限制；连接测试成功只证明指定账号的上游能力。
 普通 `/v1/models` 和单模型查询将已发现的 OpenAI 模型关联到来源账号，至少一个来源账号在当前 Key 范围内且政策允许时才展示；
 同 Provider 中未发现该模型的 `all` 账号不会使它进入列表。原生目录保留已有来源选择和完整模型对象
+
+### 账号级请求画像
+
+账号列表和详情返回 `requestProfile`（未配置覆盖时为 `null`）。配置文档与
+[Provider 客户端身份](#provider-客户端身份)的选择格式完全一致：OpenAI 账号使用预设或自定义 UA 文档，
+xAI 账号使用 Grok CLI 选择文档，由账号所属 Provider 校验，单份文档上限 64 KiB
+
+编辑账号时 `requestProfile` 必填可空：提交对象设置账号覆盖，显式 `null` 清除覆盖回到继承，
+省略字段返回 `422`。导入与 OAuth 完成的 `settings.requestProfile` 可选，省略表示不设置覆盖；
+重新授权和凭据轮换沿用现有设置语义，批量更新不支持画像字段。
+账号画像不包含凭据，也不改变账号认证或代理出口
+
+生效优先级为 **账号覆盖 > Client Key 覆盖 > 全局默认 > Provider 内置默认**；账号是最终上游身份，
+配置了账号覆盖的请求不再被 Key 或全局画像改写（含插件显式覆盖的画像设置项）。
+未配置账号覆盖时行为与既有解析链完全一致。多账号部署建议为每个账号配置不同的
+platform/terminal/版本滞后组合，模拟「每台设备各登录一个账号」的真实形态
+
+配置经 RuntimeSnapshot 冻结：保存后立即生效于新请求，在途请求沿用旧画像；
+请求内换号时各账号使用各自画像。管理员连接测试（诊断路径）不应用账号覆盖，仍按请求级画像发送。
+终态逃逸换号时同一会话的 UA 会随账号变化，这是账号级画像的残留信号；
+不配置账号覆盖的部署不受影响。请求实际生效的画像来源记录在网关日志
+（`profile_source`: `account_override` / `request_profile` / `provider_default`），
+Key 覆盖与全局默认的区分由画像预览接口的 `source` 字段提供
 
 ### 独立代理管理 / Managed Proxies
 
