@@ -182,6 +182,7 @@ const {
   modelAccess: editingModelAccess,
   proxyMode: editingProxyMode,
   proxyId: editingProxyId,
+  requestProfile: editingRequestProfile,
   selectedGroupIds: editingGroupIds,
   saving: savingAccountEdit,
   open: openAccountEdit,
@@ -427,6 +428,7 @@ const {
       v-model:model-access="editingModelAccess"
       v-model:proxy-mode="editingProxyMode"
       v-model:proxy-id="editingProxyId"
+      v-model:request-profile="editingRequestProfile"
       v-model:selected-group-ids="editingGroupIds"
       :configuration-loading="configurationLoading"
       :configuration-ready="configurationReady"

@@ -6,10 +6,11 @@ import { getXaiClientProfileOptions, previewXaiClientProfile } from '@/api/modul
 import { errorMessage } from '@/utils/operation'
 import ClientProfilePreviewPanel from './ClientProfilePreviewPanel.vue'
 
-const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean }>(), {
+const props = withDefaults(defineProps<{ active?: boolean, disabled?: boolean, allowInherit?: boolean, inheritLabel?: string }>(), {
   active: true,
   disabled: false,
   allowInherit: false,
+  inheritLabel: '全局配置',
 })
 const model = defineModel<XaiClientProfileSelection | null>({ required: true })
 const globalConfiguration = shallowRef<XaiClientProfileSelection>()
@@ -102,7 +103,7 @@ onMounted(() => props.allowInherit && void load())
         v-model="source"
         label="xAI 客户端身份来源"
         class="shrink-0"
-        :options="[{ label: '全局配置', value: 'global' }, { label: '独立配置', value: 'independent' }]"
+        :options="[{ label: props.inheritLabel, value: 'global' }, { label: '独立配置', value: 'independent' }]"
         :disabled="disabled || !globalConfiguration"
       />
       <slot name="source-extra" />

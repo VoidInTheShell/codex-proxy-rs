@@ -1,5 +1,6 @@
 import type { RequestOptions } from '../request'
 import type { AccountGroupRef } from './account-groups'
+import type { ProviderRequestProfile } from './client-profiles'
 import request from '../request'
 
 export type AccountStatus
@@ -155,6 +156,7 @@ export interface Account {
   }
   weight: number
   modelAccess: AccountModelAccess
+  requestProfile: ProviderRequestProfile | null
   accessTokenExpiresAt: string | null
   accessTokenExpiresAtDisplay: string | null
   refreshTokenExpiresAt: string | null
@@ -424,6 +426,7 @@ interface AccountUpdateParam {
   weight: number
   modelAccess?: AccountModelAccess
   groupIds: string[]
+  requestProfile: ProviderRequestProfile | null
 }
 
 interface AccountBatchUpdateParam {
@@ -449,6 +452,7 @@ export interface AccountImportSettings {
   weight: number
   modelAccess?: AccountModelAccess
   groupIds: string[]
+  requestProfile?: ProviderRequestProfile
 }
 
 interface AccountImportParam {

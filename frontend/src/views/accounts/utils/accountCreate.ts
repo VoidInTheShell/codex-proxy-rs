@@ -1,5 +1,6 @@
 import type { ApiKeyAccountForm } from './upstreamApiKey'
 import type { AccountModelAccess } from '@/api'
+import type { ProviderRequestProfile } from '@/api/modules/client-profiles'
 import { accountModelAccessError } from './modelAccess'
 import { parseAccountSchedulingForm } from './schedulingForm'
 import { emptyApiKeyAccountForm } from './upstreamApiKey'
@@ -22,6 +23,7 @@ export interface AccountCreateForm {
   importTexts: Record<AccountImportInputMode, string>
   proxyMode: string
   proxyId: string
+  requestProfile: ProviderRequestProfile | null
 }
 
 export function emptyAccountCreateForm(): AccountCreateForm {
@@ -38,6 +40,7 @@ export function emptyAccountCreateForm(): AccountCreateForm {
     importTexts: { access_token: '', refresh_token: '', json: '' },
     proxyMode: 'direct',
     proxyId: '',
+    requestProfile: null,
   }
 }
 
@@ -70,6 +73,7 @@ export function accountImportSettings(form: AccountCreateForm) {
     ...scheduling.values,
     groupIds: [...new Set(form.groupIds)],
     notes: form.notes.trim() || undefined,
+    requestProfile: form.requestProfile ? { ...form.requestProfile } : undefined,
   }
 }
 
