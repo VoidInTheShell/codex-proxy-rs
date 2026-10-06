@@ -1110,3 +1110,114 @@ fn key_profiles_replace_whole_global_choice_and_previous_snapshot_stays_frozen()
     assert_eq!(values(&previous), ["global-a", "override"]);
     assert_eq!(values(&build("global-b", false)), ["global-b", "global-b"]);
 }
+
+#[test]
+fn account_request_profiles_are_frozen_into_the_compiled_scope() {
+    use gateway_core::account::{OpaqueProviderData, ProviderAccountId};
+    let override_profile = OpaqueProviderData::new(serde_json::Map::from_iter([(
+        "terminal".to_owned(),
+        serde_json::Value::String("account-term".to_owned()),
+    )]));
+    let override_account = ProviderAccountId::new("acct_profile_override").expect("account");
+    let plain_account = ProviderAccountId::new("acct_profile_plain").expect("account");
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SettingsValues::new(3, 50, "smart", BTreeMap::new(), None, None),
+        vec![SnapshotClientPolicyFacts::new(
+            ClientApiKeyId::new("key_profile").expect("key ID"),
+            PlaintextClientApiKey::new("sk_test").expect("plaintext key"),
+            Vec::new(),
+            RateLimits::unlimited(),
+        )],
+        Vec::<SnapshotAccountGroupFacts>::new(),
+        vec![
+            SnapshotProviderAccountFacts::new(override_account.clone(), "openai")
+                .with_request_profile(Some(override_profile)),
+            SnapshotProviderAccountFacts::new(plain_account.clone(), "openai"),
+        ],
+        Vec::<SnapshotAccountGroupMemberFacts>::new(),
+    );
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts))),
+        Arc::new(TestCatalog::NoProviders),
+    );
+    let snapshot = block_on(compiler.compile()).expect("compile account profiles");
+
+    let scope = snapshot.all_account_scope();
+    let frozen = scope
+        .account_request_profile(&override_account)
+        .expect("override account keeps its frozen profile");
+    assert_eq!(
+        frozen.expose_to_provider().get("terminal"),
+        Some(&serde_json::Value::String("account-term".to_owned()))
+    );
+    assert!(
+        scope.account_request_profile(&plain_account).is_none(),
+        "accounts without override must keep the default resolution"
+    );
+    // 子请求收窄（排除已占用账号）继承同一目录，账号画像不因收窄丢失。
+    let narrowed = scope.excluding_account(plain_account);
+    assert!(
+        narrowed
+            .account_request_profile(&override_account)
+            .is_some_and(|profile| profile == frozen)
+    );
+}
+
+#[test]
+fn key_scopes_see_the_shared_account_profile_directory() {
+    use gateway_core::account::{OpaqueProviderData, ProviderAccountId};
+    let group_id =
+        gateway_core::routing::AccountGroupId::new("grp_00000000000000000000000000000001")
+            .expect("group");
+    let group = SnapshotAccountGroupFacts::new(group_id.clone(), "profile-group".to_owned(), true);
+    let account = ProviderAccountId::new("acct_grouped_profile").expect("account");
+    let override_profile = OpaqueProviderData::new(serde_json::Map::from_iter([(
+        "osType".to_owned(),
+        serde_json::Value::String("AccountLinux".to_owned()),
+    )]));
+    let facts = SnapshotFacts::new(
+        revision(1),
+        revision(1),
+        SettingsValues::new(3, 50, "smart", BTreeMap::new(), None, None),
+        vec![SnapshotClientPolicyFacts::new(
+            ClientApiKeyId::new("key_grouped").expect("key ID"),
+            PlaintextClientApiKey::new("sk_test").expect("plaintext key"),
+            vec![group_id.clone()],
+            RateLimits::unlimited(),
+        )],
+        vec![group],
+        vec![
+            SnapshotProviderAccountFacts::new(account.clone(), "openai")
+                .with_request_profile(Some(override_profile)),
+        ],
+        vec![SnapshotAccountGroupMemberFacts::new(
+            group_id,
+            account.clone(),
+        )],
+    );
+    let compiler = RuntimeSnapshotCompiler::new(
+        Arc::new(TestSnapshotStore::new(Ok(facts))),
+        Arc::new(TestCatalog::Unavailable),
+    );
+    let snapshot = block_on(compiler.compile()).expect("compile grouped scope");
+
+    // 分组绑定 Key 的冻结范围与全局范围共享同一账号目录，账号画像对两者一致可见。
+    let policy = snapshot
+        .client_policy(&ClientApiKeyId::new("key_grouped").expect("key ID"))
+        .expect("grouped key policy");
+    assert!(
+        policy
+            .account_scope()
+            .account_request_profile(&account)
+            .is_some(),
+        "key policy scope must expose frozen account profiles"
+    );
+    assert!(
+        snapshot
+            .all_account_scope()
+            .account_request_profile(&account)
+            .is_some()
+    );
+}

@@ -48,6 +48,8 @@ pub struct RuntimeAccount {
     provider_kind: ProviderKind,
     group_ids: Arc<BTreeSet<AccountGroupId>>,
     model_access: super::AccountModelAccess,
+    /// 账号级请求画像选择；`None` 表示不覆盖，请求按 Key/全局默认解析
+    request_profile: Option<super::OpaqueProviderData>,
 }
 
 impl RuntimeAccount {
@@ -57,12 +59,23 @@ impl RuntimeAccount {
             provider_kind,
             group_ids: Arc::new(group_ids),
             model_access: super::AccountModelAccess::all(),
+            request_profile: None,
         }
     }
 
     #[must_use]
     pub fn with_model_access(mut self, model_access: super::AccountModelAccess) -> Self {
         self.model_access = model_access;
+        self
+    }
+
+    /// 冻结账号级请求画像选择；只由对应 Provider 解释，不参与路由裁决
+    #[must_use]
+    pub fn with_request_profile(
+        mut self,
+        request_profile: Option<super::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profile = request_profile;
         self
     }
 
@@ -79,6 +92,11 @@ impl RuntimeAccount {
     #[must_use]
     pub fn group_ids(&self) -> &BTreeSet<AccountGroupId> {
         &self.group_ids
+    }
+
+    #[must_use]
+    pub const fn request_profile(&self) -> Option<&super::OpaqueProviderData> {
+        self.request_profile.as_ref()
     }
 }
 
@@ -114,6 +132,17 @@ impl RuntimeAccountDirectory {
     #[must_use]
     pub fn account(&self, account_id: &ProviderAccountId) -> Option<&RuntimeAccount> {
         self.accounts.get(account_id)
+    }
+
+    /// 账号级请求画像选择；随快照冻结，未配置的账号返回 `None`
+    #[must_use]
+    pub fn account_request_profile(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Option<&super::OpaqueProviderData> {
+        self.accounts
+            .get(account_id)
+            .and_then(|account| account.request_profile.as_ref())
     }
 
     #[must_use]
@@ -275,6 +304,16 @@ impl FrozenAccountScope {
     #[must_use]
     pub fn request_profiles(&self) -> &BTreeMap<ProviderKind, super::OpaqueProviderData> {
         &self.request_profiles
+    }
+
+    /// 账号级请求画像选择，优先于 Key/全局画像由 Provider 应用；
+    /// 目录为快照共享，子请求收窄克隆后仍然可查
+    #[must_use]
+    pub fn account_request_profile(
+        &self,
+        account_id: &ProviderAccountId,
+    ) -> Option<&super::OpaqueProviderData> {
+        self.directory.account_request_profile(account_id)
     }
 
     /// Key 绑定分组的冻结 Fast 策略，与账号成员资格无关

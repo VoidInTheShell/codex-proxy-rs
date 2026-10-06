@@ -247,9 +247,12 @@ impl GrokBuildProvider {
     fn request_wire_profile(
         &self,
         context: &AttemptContext,
+        account_id: &ProviderAccountId,
     ) -> Result<XaiWireProfileState, ProviderError> {
-        let profile = match context.request_profile() {
-            Some(profile) => serde_json::from_value(serde_json::Value::Object(
+        // 账号覆盖优先于 Key/全局画像：账号是最终上游身份；诊断路径没有冻结
+        // scope，沿用请求画像。覆盖解析失败不静默回退，避免设备身份悄悄漂移。
+        let decode = |profile: &gateway_core::account::OpaqueProviderData| {
+            serde_json::from_value(serde_json::Value::Object(
                 profile.expose_to_provider().clone(),
             ))
             .map_err(|_| {
@@ -257,9 +260,27 @@ impl GrokBuildProvider {
                     ProviderErrorKind::InvalidRequest,
                     UpstreamSendState::NotSent,
                 )
-            })?,
-            None => self.wire_profile.snapshot(),
+            })
         };
+        let (profile, profile_source) = match context
+            .account_scope()
+            .and_then(|scope| scope.account_request_profile(account_id))
+        {
+            Some(configuration) => (
+                decode(&self.resolve_request_profile(configuration)?)?,
+                "account_override",
+            ),
+            None => match context.request_profile() {
+                Some(profile) => (decode(profile)?, "request_profile"),
+                None => (self.wire_profile.snapshot(), "provider_default"),
+            },
+        };
+        tracing::info!(
+            request_id = context.request_id().as_str(),
+            account_id = account_id.as_str(),
+            profile_source,
+            "xAI request wire profile resolved"
+        );
         Ok(XaiWireProfileState::new(profile))
     }
 
@@ -546,7 +567,7 @@ impl GrokBuildProvider {
             Arc::clone(&self.transport),
             GrokStreamAttempt {
                 client_identity: self.client_identity.clone(),
-                wire_profile: self.request_wire_profile(&context)?,
+                wire_profile: self.request_wire_profile(&context, selected.account_id())?,
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,
@@ -624,7 +645,7 @@ impl GrokBuildProvider {
             Arc::clone(&self.transport),
             GrokCompactionStreamAttempt {
                 client_identity: self.client_identity.clone(),
-                wire_profile: self.request_wire_profile(&context)?,
+                wire_profile: self.request_wire_profile(&context, selected.account_id())?,
                 credential_recovery: Arc::clone(&self.credential_recovery),
                 responses_url: self.responses_url.clone(),
                 request: upstream_request,

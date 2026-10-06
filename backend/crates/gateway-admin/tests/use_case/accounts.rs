@@ -278,6 +278,18 @@ impl ProviderAdmin for FakeProviderAdmin {
         &self.kind
     }
 
+    fn preview_client_profile(
+        &self,
+        configuration: &OpaqueProviderData,
+    ) -> Result<OpaqueProviderData, ProviderAdminError> {
+        self.record("provider.preview_client_profile");
+        // 模拟 Provider 解析链：带 invalid 标记的文档按非法拒绝，其余放行。
+        if configuration.expose_to_provider().contains_key("invalid") {
+            return Err(ProviderAdminError::new(ProviderAdminErrorKind::Invalid));
+        }
+        Ok(configuration.clone())
+    }
+
     async fn profile_statistics(
         &self,
         _: &ProviderAccountId,
@@ -1761,6 +1773,7 @@ async fn accounts_update_should_commit_then_release_disabled_account_and_publish
         .update(
             &context("update-request"),
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1800,6 +1813,7 @@ async fn accounts_update_should_not_notify_provider_when_store_commit_fails() {
         .update(
             &context("update-failure"),
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -3042,6 +3056,7 @@ fn quota_local_usage(account_id: &str, total_tokens: u64) -> AccountUsage {
 pub(super) fn account_record(kind: &str) -> AccountRecord {
     let now = Utc::now();
     AccountRecord {
+        request_profile: None,
         notes: None,
         model_access: Default::default(),
         outbound_proxy: None,
@@ -3399,6 +3414,7 @@ fn unsupported() -> ProviderAdminError {
 
 pub(super) fn import_settings() -> gateway_admin::model::accounts::AccountImportSettings {
     gateway_admin::model::accounts::AccountImportSettings {
+        request_profile: None,
         notes: Some("团队备用".to_owned()),
         model_access: Default::default(),
         enabled: false,
@@ -3570,4 +3586,120 @@ async fn account_capacity_should_batch_page_ids_and_distinguish_idle_from_unavai
             }
         }
     }
+}
+
+#[tokio::test]
+async fn accounts_update_should_validate_and_store_account_request_profile() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store.clone()).await;
+    let profile = OpaqueProviderData::new(serde_json::Map::from_iter([(
+        "client".to_owned(),
+        serde_json::Value::String("cli".to_owned()),
+    )]));
+
+    services
+        .accounts()
+        .update(
+            &context("update-profile"),
+            UpdateAccount {
+                request_profile: Some(Some(profile.clone())),
+                notes: None,
+                model_access: Default::default(),
+                outbound_proxy: None,
+                account_id: "acct_test".to_owned(),
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect("update account with profile");
+
+    let commands = store.update_commands();
+    assert_eq!(commands[0].request_profile, Some(Some(profile)));
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "provider.preview_client_profile",
+            "store.update_account",
+            "provider.account_facts_changed",
+        ]
+    );
+}
+
+#[tokio::test]
+async fn accounts_update_should_reject_invalid_account_request_profile_before_store() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store).await;
+
+    let error = services
+        .accounts()
+        .update(
+            &context("update-invalid-profile"),
+            UpdateAccount {
+                request_profile: Some(Some(OpaqueProviderData::new(serde_json::Map::from_iter([
+                    ("invalid".to_owned(), serde_json::Value::Bool(true)),
+                ])))),
+                notes: None,
+                model_access: Default::default(),
+                outbound_proxy: None,
+                account_id: "acct_test".to_owned(),
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect_err("invalid account profile must be rejected");
+
+    assert_eq!(error.kind(), gateway_admin::model::AdminErrorKind::Invalid);
+    assert_eq!(
+        recorded(&events),
+        ["store.load_account", "provider.preview_client_profile"]
+    );
+}
+
+#[tokio::test]
+async fn accounts_update_clearing_profile_skips_provider_validation() {
+    let events = events();
+    let provider = FakeProviderAdmin::new("openai", events.clone());
+    let store = FakeAccountStore::new("openai", events.clone());
+    let services = accounts_service(provider, store.clone()).await;
+
+    services
+        .accounts()
+        .update(
+            &context("clear-profile"),
+            UpdateAccount {
+                request_profile: Some(None),
+                notes: None,
+                model_access: Default::default(),
+                outbound_proxy: None,
+                account_id: "acct_test".to_owned(),
+                enabled: true,
+                concurrency_limit: None,
+                weight: gateway_core::account::AccountWeight::DEFAULT,
+                group_ids: Vec::new(),
+            },
+        )
+        .await
+        .expect("clear account profile");
+
+    let commands = store.update_commands();
+    assert_eq!(commands[0].request_profile, Some(None));
+    assert_eq!(
+        recorded(&events),
+        [
+            "store.load_account",
+            "store.update_account",
+            "provider.account_facts_changed"
+        ]
+    );
 }

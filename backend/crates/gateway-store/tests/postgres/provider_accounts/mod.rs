@@ -1185,6 +1185,7 @@ async fn terminal_admin_mutations_keep_revision_account_and_audit_atomic() {
     let result = store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 outbound_proxy: None,
@@ -1266,6 +1267,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
         request_id: "proxy-edit".to_owned(),
     };
     let command = UpdateAccount {
+        request_profile: None,
         notes: None,
         model_access: Default::default(),
         account_id: "acct_proxy".to_owned(),
@@ -1289,6 +1291,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Url(
                     gateway_core::account::OutboundProxy::parse(
                         "socks5h://next:new-secret@127.0.0.1:1080",
@@ -1305,6 +1308,7 @@ async fn account_proxy_edits_preserve_credentials_and_clear_egress_without_audit
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(gateway_admin::model::proxies::AccountProxySelection::Direct),
                 ..command
             },
@@ -1338,6 +1342,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
         request_id: "notes-edit".to_owned(),
     };
     let command = UpdateAccount {
+        request_profile: None,
         account_id: "acct_notes".to_owned(),
         notes: Some("  团队备用\n下月续费  ".to_owned()),
         enabled: true,
@@ -1369,6 +1374,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 ..command.clone()
             },
@@ -1417,6 +1423,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
             },
             accounts: vec![account("acct_notes", "notes-user")],
             settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                request_profile: None,
                 notes: None,
                 enabled: true,
                 concurrency_limit: None,
@@ -1444,6 +1451,7 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
     store
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: Some(" \n\t ".to_owned()),
                 ..command
             },
@@ -1460,6 +1468,102 @@ async fn account_notes_round_trip_and_survive_import_and_scheduling_updates() {
             .account
             .notes,
         None
+    );
+    database.close().await;
+}
+
+#[tokio::test]
+async fn account_request_profile_round_trip_and_three_state_updates() {
+    let Some(database) = TestDatabase::create("account_profile").await else {
+        return;
+    };
+    let repository = PgProviderAccountRepository::new(database.pool.clone());
+    repository
+        .insert_provider_account(account("acct_profile", "profile-user"))
+        .await
+        .unwrap();
+    let store = admin_account_store(&database.pool);
+    let context = MutationContext {
+        actor: MutationActor::System,
+        request_id: "profile-edit".to_owned(),
+    };
+    let profile = |terminal: &str| {
+        OpaqueProviderData::new(
+            json!({
+                "client": "cli", "platform": "linux", "versionMode": "latest",
+                "terminal": terminal,
+            })
+            .as_object()
+            .unwrap()
+            .clone(),
+        )
+    };
+    let command = |request_profile| UpdateAccount {
+        request_profile,
+        account_id: "acct_profile".to_owned(),
+        notes: None,
+        enabled: true,
+        concurrency_limit: None,
+        weight: gateway_core::account::AccountWeight::DEFAULT,
+        group_ids: vec![],
+        outbound_proxy: None,
+        model_access: None,
+    };
+
+    // Some(Some) 设置覆盖；Some(None) 清除；None 保留现状。
+    store
+        .update_account(command(Some(Some(profile("acct-term")))), &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_account("acct_profile", AccountRuntimeSnapshot::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .request_profile,
+        Some(profile("acct-term"))
+    );
+    let changed_fields: Vec<String> = sqlx::query_scalar(
+        "select changed_fields from admin_audit_events order by id desc limit 1",
+    )
+    .fetch_one(&database.pool)
+    .await
+    .unwrap();
+    assert!(
+        changed_fields
+            .iter()
+            .any(|field| field == "request_profile")
+    );
+
+    store.update_account(command(None), &context).await.unwrap();
+    assert_eq!(
+        store
+            .load_account("acct_profile", AccountRuntimeSnapshot::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .request_profile,
+        Some(profile("acct-term")),
+        "profile-preserving updates must keep the override"
+    );
+
+    store
+        .update_account(command(Some(None)), &context)
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .load_account("acct_profile", AccountRuntimeSnapshot::default())
+            .await
+            .unwrap()
+            .unwrap()
+            .account
+            .request_profile,
+        None,
+        "explicit null must clear the override back to inheritance"
     );
     database.close().await;
 }
@@ -1487,6 +1591,7 @@ async fn invalid_account_notes_roll_back_scheduling_revision_and_audit() {
     let result = admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 account_id: "acct_notes".to_owned(),
                 notes: Some("备".repeat(501)),
                 enabled: false,
@@ -1977,6 +2082,7 @@ async fn authorization_create_returns_existing_account_id_when_identity_is_upser
                 )
                 .unwrap(),
                 settings: Some(gateway_admin::model::accounts::AccountImportSettings {
+                    request_profile: None,
                     notes: Some("  OAuth 新建备注  ".to_owned()),
                     model_access: Default::default(),
                     enabled: false,
@@ -2510,6 +2616,7 @@ async fn provider_account_admin_mutations_are_scoped_audited_and_atomic() {
 
     let revision = repository
         .batch_update_provider_accounts_admin(BatchUpdateProviderAccountsAdmin {
+            request_profile: None,
             notes: None,
             model_access: Default::default(),
             outbound_proxy: None,
@@ -2578,6 +2685,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
     .await
     .expect("seed group");
     let settings = UpdateAccount {
+        request_profile: None,
         account_id: ACCOUNT_ID.to_owned(),
         notes: Some("统一保存".to_owned()),
         enabled: false,
@@ -2627,6 +2735,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_group",
             2,
             UpdateAccount {
+                request_profile: None,
                 enabled: true,
                 group_ids: vec![
                     AccountGroupId::new("grp_00000000000000000000000000000092").unwrap(),
@@ -2638,6 +2747,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "missing_proxy",
             2,
             UpdateAccount {
+                request_profile: None,
                 outbound_proxy: Some(AccountProxySelection::Saved("missing_proxy".to_owned())),
                 ..settings.clone()
             },
@@ -2646,6 +2756,7 @@ async fn credential_rotation_and_settings_share_one_transaction() {
             "stale_credential",
             1,
             UpdateAccount {
+                request_profile: None,
                 enabled: true,
                 notes: Some("must not persist".to_owned()),
                 ..settings.clone()
@@ -3305,6 +3416,7 @@ async fn proxy_edit_preserves_an_inflight_token_refresh() {
     admin_account_store(&database.pool)
         .update_account(
             UpdateAccount {
+                request_profile: None,
                 notes: None,
                 model_access: Default::default(),
                 account_id: id.as_str().to_owned(),
@@ -3363,6 +3475,7 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
     .await
     .expect("seed group");
     let settings = AccountImportSettings {
+        request_profile: None,
         notes: Some("  批量新建\n团队备用  ".to_owned()),
         model_access: Default::default(),
         enabled: false,
@@ -3415,12 +3528,14 @@ async fn account_import_settings_apply_atomically_to_new_and_existing_identities
         .expect("existing account");
     for invalid_settings in [
         AccountImportSettings {
+            request_profile: None,
             group_ids: vec![
                 AccountGroupId::new("grp_00000000000000000000000000000092").expect("missing group"),
             ],
             ..settings.clone()
         },
         AccountImportSettings {
+            request_profile: None,
             notes: Some("备".repeat(501)),
             ..settings
         },

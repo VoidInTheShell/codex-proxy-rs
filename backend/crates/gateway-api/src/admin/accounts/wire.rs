@@ -293,6 +293,8 @@ pub struct AccountView {
     pub capacity: AccountCapacityView,
     pub weight: u16,
     pub model_access: gateway_core::account::AccountModelAccess,
+    /// 账号级请求画像选择；`null` 表示未配置覆盖
+    pub request_profile: Option<serde_json::Value>,
     pub access_token_expires_at: Option<String>,
     pub access_token_expires_at_display: Option<String>,
     pub refresh_token_expires_at: Option<String>,

@@ -124,7 +124,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, request_profile_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -153,7 +153,7 @@ impl ProviderAccountRepository for PgProviderAccountRepository {
         let rows = sqlx::query(
             "select auto_location, detected_location_json, location_country, location_region, location_city, location_timezone, outbound_proxy_url, id, provider_kind, name, notes, email, upstream_user_id,
                     upstream_account_id, plan_type, authentication_kind, credential_revision, has_refresh_token,
-                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, credential_state,
+                    access_token_expires_at, next_refresh_at, enabled, concurrency_limit, weight, model_access_json, request_profile_json, credential_state,
                     credential_observed_at, quota_access_state, quota_evidence,
                     quota_access_observed_at, quota_reset_at,
                     quota_observed_at, last_error_reason, last_error_message, created_at, updated_at
@@ -531,6 +531,7 @@ impl ProviderAccountAdminRepository for PgProviderAccountRepository {
                 command.weight,
                 command.model_access.as_ref(),
                 command.outbound_proxy.as_ref(),
+                command.request_profile.as_ref().map(|p| p.as_ref()),
             )
             .await?;
             if let Some(group_ids) = &command.group_ids {
@@ -876,6 +877,8 @@ pub(crate) async fn rotate_provider_account_in_transaction(
     Revision::new(to_u64(next)?)
 }
 
+// 参数与上游批量调度更新语义一一对应（三态画像与三态代理/限额并列），不另建结构体
+#[expect(clippy::too_many_arguments)]
 pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     account_ids: &[String],
@@ -884,6 +887,7 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     weight: Option<AccountWeight>,
     model_access: Option<&gateway_core::account::AccountModelAccess>,
     outbound_proxy: Option<&gateway_admin::model::proxies::AccountProxySelection>,
+    request_profile: Option<Option<&gateway_core::account::OpaqueProviderData>>,
 ) -> StoreResult<()> {
     let (proxy_id, proxy) = match outbound_proxy {
         Some(selection) => {
@@ -891,12 +895,21 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
         }
         None => (None, None),
     };
+    // 画像三态：None 保留，Some(None) 清除为继承，Some(Some) 设置；与代理列同样用条件写入
+    let (profile_present, profile_value) = match request_profile {
+        None => (false, None),
+        Some(profile) => (true, profile),
+    };
+    if profile_present && let Some(profile) = profile_value {
+        super::rows::validate_account_request_profile(profile)?;
+    }
     let updated = sqlx::query_scalar::<_, String>(
         "update provider_accounts
          set enabled = coalesce($2, enabled), concurrency_limit = case when $9 then $3 else concurrency_limit end, weight = coalesce($4, weight), updated_at = greatest(now(), updated_at),
              outbound_proxy_url = case when $5 then $6 else outbound_proxy_url end,
              outbound_proxy_id = case when $5 then $7 else outbound_proxy_id end,
-             model_access_json = coalesce($8, model_access_json)
+             model_access_json = coalesce($8, model_access_json),
+             request_profile_json = case when $10 then $11 else request_profile_json end
          where id = any($1::text[])
          returning id",
     )
@@ -909,6 +922,8 @@ pub(crate) async fn update_provider_accounts_scheduling_in_transaction(
     .bind(proxy_id)
     .bind(model_access.map(sqlx::types::Json))
     .bind(concurrency_limit.is_some())
+    .bind(profile_present)
+    .bind(profile_value.map(sqlx::types::Json))
     .fetch_all(&mut **transaction)
     .await
     .map_err(|_| postgres_unavailable("set provider accounts state in admin transaction"))?
@@ -1078,6 +1093,8 @@ pub(super) async fn import_provider_accounts_in_transaction(
             Some(settings.weight),
             settings.model_access.as_ref(),
             None,
+            // 导入设置只在显式提供时设置画像；未提供保留账号现有值，重导入不清洗。
+            settings.request_profile.as_ref().map(Some),
         )
         .await?;
         replace_account_group_assignments_in_transaction(
@@ -1143,6 +1160,10 @@ pub(super) async fn rotate_provider_account_admin_in_transaction(
             Some(settings.weight),
             settings.model_access.as_ref(),
             settings.outbound_proxy.as_ref(),
+            settings
+                .request_profile
+                .as_ref()
+                .map(|profile| profile.as_ref()),
         )
         .await?;
         replace_account_group_assignments_in_transaction(transaction, ids, &settings.group_ids)

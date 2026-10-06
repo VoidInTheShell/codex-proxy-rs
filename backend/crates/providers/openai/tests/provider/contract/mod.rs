@@ -1,6 +1,7 @@
 //! OpenAI 执行合同测试入口，以及协议转换与发送前校验测试
 
 mod account_isolation;
+mod account_profile;
 mod capacity;
 mod precommit;
 mod response_interrupt;

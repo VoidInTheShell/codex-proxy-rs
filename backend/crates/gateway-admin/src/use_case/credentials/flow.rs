@@ -75,6 +75,13 @@ impl ProviderCredentials {
             &prepared,
             "provider credential import",
         )?;
+        if let Some(profile) = command
+            .settings
+            .as_ref()
+            .and_then(|s| s.request_profile.as_ref())
+        {
+            super::super::validate_account_request_profile(self.provider.as_ref(), profile)?;
+        }
         let result = self
             .accounts
             .commit_credential_import(
@@ -134,6 +141,13 @@ impl ProviderCredentials {
             .settings
             .as_ref()
             .is_some_and(|settings| !settings.enabled);
+        if let Some(profile) = command
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.request_profile.as_ref().and_then(|p| p.as_ref()))
+        {
+            super::super::validate_account_request_profile(self.provider.as_ref(), profile)?;
+        }
         let details = required_credential(
             self.accounts.as_ref(),
             self.provider.provider_kind(),
@@ -205,6 +219,9 @@ impl super::CredentialsService {
         let scope = self.for_provider(kind)?;
         let provider = &scope.provider;
         let settings = command.settings.take();
+        if let Some(profile) = settings.as_ref().and_then(|s| s.request_profile.as_ref()) {
+            super::super::validate_account_request_profile(provider.as_ref(), profile)?;
+        }
         let prepared = provider
             .complete_authorization(command)
             .await

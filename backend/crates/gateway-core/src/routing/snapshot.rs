@@ -96,6 +96,8 @@ pub struct SnapshotProviderAccountFacts {
     account_id: ProviderAccountId,
     provider_kind: String,
     model_access: crate::account::AccountModelAccess,
+    /// 账号级请求画像选择；`None` 表示不覆盖，运行时按 Key/全局默认解析
+    request_profile: Option<crate::account::OpaqueProviderData>,
 }
 
 impl SnapshotProviderAccountFacts {
@@ -105,6 +107,7 @@ impl SnapshotProviderAccountFacts {
             account_id,
             provider_kind: provider_kind.into(),
             model_access: crate::account::AccountModelAccess::all(),
+            request_profile: None,
         }
     }
 }
@@ -113,6 +116,16 @@ impl SnapshotProviderAccountFacts {
     #[must_use]
     pub fn with_model_access(mut self, model_access: crate::account::AccountModelAccess) -> Self {
         self.model_access = model_access;
+        self
+    }
+
+    /// 冻结账号级请求画像选择；由 Provider 在选中账号后应用
+    #[must_use]
+    pub fn with_request_profile(
+        mut self,
+        request_profile: Option<crate::account::OpaqueProviderData>,
+    ) -> Self {
+        self.request_profile = request_profile;
         self
     }
 }
@@ -424,7 +437,8 @@ async fn compile_runtime_snapshot(
             .insert(
                 account.account_id.clone(),
                 RuntimeAccount::new(provider_kind, BTreeSet::new())
-                    .with_model_access(account.model_access),
+                    .with_model_access(account.model_access)
+                    .with_request_profile(account.request_profile),
             )
             .is_some()
         {
@@ -450,7 +464,8 @@ async fn compile_runtime_snapshot(
             .get_mut(&account_id)
             .ok_or(RuntimeSnapshotCompileError::InvalidData)?;
         *account = RuntimeAccount::new(account.provider_kind().clone(), group_ids)
-            .with_model_access(account.model_access().clone());
+            .with_model_access(account.model_access().clone())
+            .with_request_profile(account.request_profile().cloned());
     }
     let account_directory = Arc::new(RuntimeAccountDirectory::new(accounts));
 
